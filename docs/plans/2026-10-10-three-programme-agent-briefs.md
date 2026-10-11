@@ -49,13 +49,13 @@ not be in flight at once.
 | Database migration | One migration PR open at a time. `pnpm db:migration:new` writes N+1 in `core.ts` and `migrations.ts`, so two branches cut from `main` both write 38. The version goes to whichever merges first. | Whichever is ready first takes it. Expected order: CI-3 (no gate left), SC-2 (gates cleared 2026-10-10; one migration that rebuilds the working-layer constraints, see SC-2), CE-P step 2 (CE-6), CI-9 and the ADR-0040 link-capture writer (slice-2 plan step 3). CE-3 joins only if it mirrors the Egress fields onto `captures`. #1498, re-triaged on 2026-10-10, joins with its migration; it stays off the dispatch list until the maintainer answers the schema-version question asked on the issue. The maintainer keeps #811 out of the queue, or folds it into SC-2, while SC-2 holds `tagRepo.ts`. |
 | Manifest schema | A verifier release ships before any writer of the new fields merges (ADR-0023). | beta.23 (#1799) ships as is, carrying only #1747's schema-5 (Egress) reader (ruling 19). CE-3, the writer of the schema-5 fields, merges after beta.23 is tagged. Then, under one number: CE-P step 1 (CE-5), the ADR-0040 verifier step (after #1736 accepts ADR-0040), #586's schema step once ruled, and #1498's verifier step. The release carrying CE-5's verifier follows; then CE-P's writer steps 6, 9 and 10 merge, and the stage-2 verifier step (CE-S2) takes the next number. SC-5 joins only if the node key cannot persist, and #1638's fix joins if #1812's rule adds a signed field. |
 | Case Archive version | One bump in flight; each takes the next number at merge. | SC-2 (if its migration changes what an archive carries), the ADR-0040 link-capture writer, CI-9b, CE-P step 3 (the first slice's one bump, which merges before any CE-P writer step; ruling 33), #1813 once its option is chosen, and CE-3 if it mirrors Egress columns, in the order they become ready. |
-| Hot files | Rebase cost, not correctness. Merge in the stated order. | `backgroundRenderer.ts`: CE-1, CE-2, CE-3, #1499, then CE-P steps 6, 9 and 10. `recapture.ts`: CE-2, CE-3, #1499, the link-capture writer, then CE-P steps 6, 9 and 10. `captureLifecycle.ts`: #1815, CE-3, CI-4, SC-2b, CE-10, then CE-P steps 3, 6, 9 and 10 (step 3 may land earlier at rebase cost only), then the stage-2 clicked-Capture step. `captureRepo.ts`: CI-1, SC-2b, CI-5, CE-P step 2, CI-14. `noteRepo.ts`: CI-1, then SC-2. `manifest.ts`: SC-1, #1815 (if it changes `withDeletionEntry`), SC-2, CE-P step 1, SC-6. `trustedTime.ts` and `timestampWorker.ts`: SC-1, then SC-2b and SC-4. `settings.ts`: CE-3, CE-4, then SC-5. `OperatorConfig.tsx`: CE-3. `TopBar.tsx`: CE-4, then SC-8. `caseArchive.ts`: SC-2 and CE-3 (only if they bump the archive version), CI-4, then CI-9b, the link-capture writer, CE-P step 3 and #1813 in the Case Archive lane's order. `exhibitBackfill.ts`: #1814, #1813, then SC-2b. `export.ts`: #1814 and #1815 (if either changes it), SC-4 (if packages carry receipt stamps), CE-P step 4, then CI-13. `verifyScript.ts` and `verifyRunbook.ts`: SC-V, SC-4 (if packages carry receipt stamps), CE-P step 4. |
+| Hot files | Rebase cost, not correctness. Merge in the stated order. | `backgroundRenderer.ts`: CE-1, CE-2, CE-3, #1499, then CE-P steps 6, 9 and 10. `recapture.ts`: CE-2, CE-3, #1499, the link-capture writer, then CE-P steps 6, 9 and 10. `captureLifecycle.ts`: #1815, CE-3, CI-4, SC-2b, CE-10, then CE-P steps 3, 6, 9 and 10 (step 3 may land earlier at rebase cost only), then the stage-2 clicked-Capture step. `captureRepo.ts`: CI-1, SC-2b, CI-5, CE-P step 2, CI-14. `noteRepo.ts`: CI-1, then SC-2. `manifest.ts`: SC-1, #1815 (if it changes `withDeletionEntry`), SC-2, CE-P step 1, SC-6. `trustedTime.ts` and `timestampWorker.ts`: SC-1, then SC-2b and SC-4. `settings.ts`: CE-3, CE-4, then SC-5. `OperatorConfig.tsx`: CE-3. `TopBar.tsx`: CE-4, then SC-8. `caseArchive.ts`: SC-2 and CE-3 (only if they bump the archive version), CI-4, then the link-capture writer, CI-9b, CE-P step 3 and #1813 in the Case Archive lane's order. `exhibitBackfill.ts`: #1814, #1813, then SC-2b. `export.ts`: #1814 and #1815 (if either changes it), SC-4 (if packages carry receipt stamps), CE-P step 4, then CI-13. `verifyScript.ts` and `verifyRunbook.ts`: SC-V, SC-4 (if packages carry receipt stamps), CE-P step 4. |
 
 Outside this plan: #1638's fix, rewritten once #1812's note is approved, joins the `manifest.ts`
 hot-file list, and the manifest schema lane if the note's rule adds a signed field. #1523
-(ruling 14: imported Captures start unverified; `ready-for-agent` and `queued`) changes how the
-Case Archive import writes Capture rows (`importCaptureRows` in `captureRepo.ts`), so it takes its
-turn in that file's order after CI-1. An issue outside this plan that needs a lane a brief here
+(ruling 14: imported Captures start unverified; `ready-for-agent`) changes how the Case Archive
+import writes Capture rows (`importCaptureRows` in `captureRepo.ts`), so it takes its turn in that
+file's order after CI-1. An issue outside this plan that needs a lane a brief here
 holds stays out of the queue until the lane frees, or takes a slot in the stated order.
 
 `src/shared/ipc.ts`, `ipcHandlers.ts` and `src/preload/index.ts` change in most briefs. The
@@ -79,6 +79,11 @@ each brief's issue as its wave opens; each to-file brief is filed and triaged th
 | An ADR choosing the AI layer's local model and runtime, and the open questions G3 and G7 in the view brief. | The AI layer's local option and later view states; not briefed |
 | Approve CE-A's browser cookie-import ADR (ruling 72). | The cookie-import ticket under #541, which is also grilled before it is ready-for-agent |
 | If CE-3 is still waiting on beta.23 when SC-5 is otherwise ready, choose: hold SC-5 for CE-3, or merge SC-5 without the non-Direct Egress state and file a follow-up that adds it once CE-3 merges. | SC-5 |
+| Pick an option on #1813. The issue recommends option (a): the archive carries every anchored Derived File. | #1813, and its place in the Case Archive lane |
+| Answer the schema-version question asked on #1498. | #1498's place in the migration lane and on the dispatch list |
+| Rule on stage-2 decision D18 (glossary), which stays open. The stage-2 spec recommends adding a Capture Scope entry to `CONTEXT.md` and amending its Active Case entry when #600 lands. | The `CONTEXT.md` changes in the stage-2 passive capture step (#600) |
+| Designer designs from CE-U's brief in the Birdbrain UI design project. | The stage-2 clicked-Capture step (through the feasibility pass on the mock), CI-14, CI-V1's header count and CI-V4's gap-list entry |
+| Decide where in the app #1816 shows the capture engine's facts. | #1816's re-triage to ready-for-agent |
 
 ### Ruled on 2026-10-10
 
@@ -124,12 +129,13 @@ Token attests for a Capture without MHTML (stage 4, in the Capture engine briefs
 - **First slice (25 to 35).** The `warcio` licence, the test readers, the probe rerun policy, the
   spec's open questions 1 and 2, and the CE-P plan's open questions A to F. CE-P lists the ones
   that change its steps.
-- **Stage 2 (37 to 56).** The stage-2 spec's decisions D1 to D23, except D18. CE-S2 lists the ones
-  that change this plan.
+- **Stage 2 (37 to 56).** The stage-2 spec's decisions D1 to D23, except D18, which stays open
+  (gates table). CE-S2 lists the ones that change this plan.
 - **Investigate section (57).** Option (a): CI-V1 registers the route and components, and CI-V5
   adds the `Sidebar.tsx` and command palette entries.
 - **MCP and Withheld (58).** MCP tools list a withheld Exhibit with its mark and never return its
-  content or values drawn from it; the implementing brief (CI-D1) audits every registered tool.
+  content or values drawn from it; the implementing brief, still to file ("MCP tools and Withheld
+  from analysis"), audits every registered tool.
 - **CI-P (59 to 69).** E23 approved as proposed, which rules #543 for a Shared Case; CI-P's open
   questions answered; the four brief splits taken. The CI briefs carry each ruling.
 - **Designer items (70).** The Withheld from analysis mark and the "not read" count join CE-U.
@@ -160,7 +166,8 @@ a lane moves to its next brief as soon as its own dependencies merge.
 The Agents column counts the briefs in each wave that still need an agent. It is the most that
 can run at once in a session the maintainer watches (ruling 3); unattended, dispatch runs two.
 Delivered docs wait on the maintainer's reading and run no agent. The stage-2 code briefs are
-not in the table yet: they are filed once the stage-2 spec is approved (see CE-S2).
+not in the table yet: they are filed once the stage-2 spec is approved (see CE-S2). Nor is the
+ruling 58 brief, "MCP tools and Withheld from analysis", which no plan has placed yet.
 
 Wave 0 has four docs agents (SC-F, CE-P step 0, CE-U and CE-AR) and eight code agents. Seven of
 the code briefs (SC-1, #1814, #1815, CE-1, CE-2, CI-1 and CI-3) touch blocking-tier paths and need
@@ -282,9 +289,9 @@ non-Direct Egress state (see the gates table). Not evidence-affecting while the 
 - The ticket `listen` hands out carries the node id and relay URL only, never a direct address
   (ruling 74).
 - If the node id changes across restarts despite the stored key, the work stops for re-triage: a
-  rotation path in `member-add` (`ManifestMemberAddEntrySchema` in `src/shared/schemas.ts`) would
-  make SC-5 evidence-affecting and put it in the manifest schema lane, with a verifier release
-  before any writer.
+  rotation path in `member-add` (`ManifestMemberAddEntrySchema` in `src/shared/schemas.ts`, a
+  `.strict()` schema pinned at 4) would make SC-5 evidence-affecting and put it in the manifest
+  schema lane, with a verifier release before any writer.
 - Carries ADR-0032's requirement: when the Egress is not Direct, sync still runs and the sharing
   state says so, so SC-8 can show the notice that teammates and the relay see the Operator's
   addresses. The notice's wording and placement are in the designer's revision of the members
@@ -347,8 +354,8 @@ IPC types from SC-5 and SC-6, and #1514's relabel to `ready-for-agent`. Evidence
 
 **SC-9. Sync service (to file).** Wave 4, after SC-5 and SC-6. Evidence-affecting by path
 (`src/main/index.ts` is blocking tier).
-- Spec decision 13 makes sync automatic (app start, a 60-second timer, Sync now). Neither #1512
-  nor #1809 owns the timer, the startup run or the listening endpoint.
+- Spec decision 13 makes sync automatic (app start, a 60-second timer, Sync now). Neither #1512,
+  #1809 nor #1810 owns the timer, the startup run or the listening endpoint.
 - Starts in a new sharing service module and `src/main/index.ts`.
 - Done when, with fake timers over `MemoryTransport`, a session runs at startup for every shared
   Case, repeats every 60 s while a peer is reachable, and stops for revoked members; the endpoint
@@ -390,11 +397,11 @@ only.
   plus the Entry Hash subject of a Timestamp Token.
 - Verify with `.claude/hooks/vale-prose.sh --base origin/main` and `pnpm dlx mint broken-links`.
 
-**SC-F. Fork authorship design note (#1812).** Wave 0, ready-for-agent. Docs only.
-- Ruling 13: after a Shared Case fork the app accepts the forking member as the author of every
-  Exhibit the old Owner wrote (#1638). Before any code, an agent writes a short note proposing the
-  stricter rule, likely a signed fork marker on the `import` entry, for the maintainer's approval;
-  #1638 then becomes a fix an agent can take.
+**SC-F. Fork authorship design note (#1812).** Wave 0. Docs only.
+- #1638: after a Shared Case fork the app accepts the forking member as the author of every
+  Exhibit the old Owner wrote. Ruling 13: before any code, an agent writes a short note proposing
+  a stricter rule, likely a signed fork marker on the `import` entry, for the maintainer's
+  approval; #1638 then becomes a fix an agent can take.
 - The note answers the three questions in #1638's 2026-10-05 triage comment, recommends one rule,
   says what the app reports for a fork made before the rule exists, and states whether the fix
   joins the manifest schema lane and where it falls in the `manifest.ts` order.
@@ -408,8 +415,8 @@ only.
 (ruling 15). PR #1672 found three gaps, each filed as its own issue and each evidence-affecting.
 
 **#1813. Case Archives carry the Derived Files a chain anchors.** Wave 1, once the maintainer picks
-an option on the issue (filed ready-for-human; it recommends option (a): the archive carries
-every anchored Derived File, and the import restores each with its `derived_files` row). Under
+an option on the issue (gates table; the issue recommends option (a): the archive carries every
+anchored Derived File, and the import restores each with its `derived_files` row). Under
 option (a) it takes the Case Archive lane.
 - A package exported from an imported Case fails both its checks when the source installation had
   already made thumbnails, because a Case Archive carries no thumbnail files.
@@ -419,7 +426,7 @@ option (a) it takes the Case Archive lane.
   `derived_files` row, an archive at the previous version still imports, and a native Case's
   package bytes are unchanged.
 
-**#1814. Thumbnails made after a renamed import.** Wave 0, ready-for-agent.
+**#1814. Thumbnails made after a renamed import.** Wave 0.
 - After an import renames colliding records, the next launch's backfill signs each thumbnail
   under the new id, while the export names files the way the signed history does, so the in-app
   package check fails.
@@ -429,7 +436,7 @@ option (a) it takes the Case Archive lane.
   passes `verify.sh` and the in-app package verifier, and a native Case's backfill entries and
   package bytes are unchanged.
 
-**#1815. Deleting a renamed Capture.** Wave 0, ready-for-agent.
+**#1815. Deleting a renamed Capture.** Wave 0.
 - A `deletion` signed under a renamed Capture's new id leaves both verifiers expecting that
   Capture's page, screenshot and token.
 - Starts in `captureLifecycle.ts` (`deleteOne` and the `deleteMany` path), `manifest.ts`
@@ -504,7 +511,8 @@ evidence-affecting.
   renderer spike (step 0) and ten steps, each one PR and one issue. It answers the spec's five
   open questions, settles the `warcio` licence and the test readers, and reran the probe on
   Electron 44.5.1 with no change. `launched` stays out of step 1 (plan D13); the stage-2 verifier
-  step carries it.
+  step carries it. `companion` is stage 3 (ADR-0034, order of work) and waits for CE-S3 to define
+  its entry.
 - The maintainer ruled on its questions on 2026-10-10 (rulings 25 to 35) and approves it with the
   spec after reading #1803 (rulings 36, 71). The rulings that shape the steps below: the
   Transaction Record is a `.warc.gz` with one `gzip` member per record (27); decoded bodies keep
@@ -664,7 +672,8 @@ any stage-2 code brief. Ready-for-agent since 2026-10-10. Evidence-affecting, bl
 (`captureLifecycle.ts`).
 - Ruling 21: data extraction runs in an Electron utility process, built as a further main-side
   entry in `electron.vite.config.ts`. The CI-4 field build may share the process, and the PR says
-  whether it did. The stage-2 CDP client stays in the main process (ruling 40).
+  whether it did. The stage-2 CDP client stays in the main process, and moves to the utility
+  process only if measurements show stalls (ruling 40).
 - Starts in `captureLifecycle.ts` (`runPostCaptureWork`, `runDataExtraction`, `reprocessCase`),
   `src/main/services/extraction/extractionSource.ts`, `dataExtractor.ts` and
   `src/main/services/db/extractedDataRepo.ts`.
@@ -689,15 +698,18 @@ any stage-2 code brief. Ready-for-agent since 2026-10-10. Evidence-affecting, bl
   - D3: launched-browser Transaction Records carry no request bodies. An ADR amending ADR-0035,
     ADR-0036 and the `CONTEXT.md` Transaction Record entry merges before the clicked-Capture step.
   - D5: the verifier learns `launched-passive` in a release before #600's writer merges, and the
-    glossary and reporting surfaces change with #600.
+    glossary and reporting surfaces change with #600. #599, which says the value lands with #600
+    and "not before", needs clarifying to match.
   - D7: one Persona import seeds both the Electron partition and the launched browser's profile.
     Ruling 43 adds a requirement, detecting installed browsers and importing their cookies, which
     CE-A and CE-AR take up.
-  - D13: a timed-out exclusion pattern counts as a match for passive Captures only; ADR-0037 and
-    #600 are amended, and `safeRegexTest` reports a timeout apart from no match.
+  - D13: a timed-out exclusion pattern counts as a match for passive Captures only, and
+    `safeRegexTest` reports a timeout apart from no match. The ruling amends ADR-0037's
+    exclusion-policy sentence and the same constraint in #600, and the passive capture step waits
+    for the ADR-0037 amendment that records it.
   - D19 and D22: the Capture Session panel and telling the launched browser apart go to CE-U.
-  - D20: a launched browser runs only inside a Capture Session, and the Capture Method entry of
-    `CONTEXT.md` and ADR-0034 are narrowed to match.
+  - D20: a launched browser runs only inside a Capture Session. The ruling narrows the Capture
+    Method entry of `CONTEXT.md` and ADR-0034's recording scope to match.
   - D21: the Persona is chosen at launch and holds for the browser's life; #546's threat-model
     delta updates the wrong-persona mitigation.
   - D23: a small in-repo download script fetches a pinned Chrome for Testing build and checks its
@@ -710,11 +722,11 @@ any stage-2 code brief. Ready-for-agent since 2026-10-10. Evidence-affecting, bl
 
 **CE-S3. Spec for stage 3, the Companion pipe and removing extension capture (to file).** Wave 2,
 after CE-S2 merges. Docs only.
-- Covers the pipe's transport and authentication, what remains of the Capture Server, the legacy
-  `extension` value, the `debugger` permission and its Chrome Web Store review exposure, and the
-  deletion list (the screenshot stitcher, the `HOTFIX:` blocks, the `webRequest` header code, and
-  #635's work, folded in on 2026-10-10). #1667's extension half closes in favor of this stage
-  (ruling 24).
+- Covers the pipe's transport and authentication, what remains of the Capture Server, the
+  `companion` Capture Method's entry and wording, the legacy `extension` value, the `debugger`
+  permission and its Chrome Web Store review exposure, and the deletion list (the screenshot
+  stitcher, the `HOTFIX:` blocks, the `webRequest` header code, and #635's work, folded in on
+  2026-10-10). #1667's extension half closes in favor of this stage (ruling 24).
 
 **CE-U. Designer UI brief for the launched browser and the investigation view (to file).** Wave 0.
 Docs only.
@@ -725,13 +737,12 @@ Docs only.
   the unreviewed view (ADR-0044); and the investigation header's "not read" count, shown beside
   the "read" and "withheld" counts, with the gap list naming the unread kinds (CI-P open
   question 15, ruling 68).
-- The designer designs from it in the Birdbrain UI design project. The panel's design lands
-  before the stage-2 launcher step builds the panel, and a feasibility pass on the mock runs
-  before the clicked-Capture step.
+- The designer designs from it in the Birdbrain UI design project, and a feasibility pass on the
+  mock runs before the stage-2 clicked-Capture step (ruling 55).
 - Deliverable: `docs/specs/2026-10-NN-launched-browser-and-investigation-ui-brief.md`. Verify with
   `.claude/hooks/vale-prose.sh --base origin/main`.
-- Blocks the stage-2 launcher and clicked-Capture steps, CI-14, CI-V1's header count and CI-V4's
-  gap-list entry.
+- Blocks the stage-2 clicked-Capture step (through the feasibility pass), CI-14, CI-V1's header
+  count and CI-V4's gap-list entry.
 
 **CE-AR. Check whether Persona partition cookies are encrypted at rest (to file).** Wave 0. Docs
 and one code comment.
@@ -758,11 +769,11 @@ Docs only.
   fallback. Birdbrain never works around App-Bound Encryption, so Chrome and Edge on Windows stay
   file-only, and it tells macOS users to pick Allow, not Always Allow.
 - Amends ADR-0030 (the "Three mechanisms, one attribute" and "No secrets beyond the browser
-  session" paragraphs of its Decision), the persona plan (the Chrome and Firefox rows of its
-  supported cookie formats table, its out-of-scope list, and the extension-seeding item among
-  its pinned items), ADR-0034 (the paragraph on Background Captures staying in Electron's hidden
-  window), and the stage-2 spec's S3 and its section on cookie seeding from the Persona
-  import.
+  session" paragraphs of its Decision), the persona plan (the Firefox, Chrome `Cookies` and
+  whole-browser-profile rows of its Supported cookie formats table, its out-of-scope list, and
+  the extension-seeding item among its pinned items), ADR-0034 (the paragraph on Background
+  Captures staying in Electron's hidden window), and the stage-2 spec's S3 and its section on
+  cookie seeding from the Persona import.
 - Its starting point is the 2026-10-10 cookie-import research memo behind ruling 72; the issue
   links it when filed.
 - The maintainer approves the ADR (gates table). The build is a new ticket under #541, grilled
@@ -773,12 +784,12 @@ Docs only.
   `.claude/hooks/vale-prose.sh --base origin/main`.
 
 **#1816. Show the capture engine's facts on a Capture.** Wave 8, after CE-P step 10 and CE-3.
-Filed ready-for-human; evidence-affecting.
+Evidence-affecting.
 - Ruling 23 closed #1694 and filed this: for one Capture, the app shows the Egress kind and label,
   the artifact inventory, the Scroll-to-load outcome and Bound TLS Details, with Bound TLS Details
   kept apart from the TLS Cert Chain view.
-- It is re-triaged to ready-for-agent once CE-P step 10 has merged and placement is decided, with
-  every field name re-derived from the merged schema.
+- Triage moves it to ready-for-agent once CE-P step 10 has merged and the maintainer decides
+  where it shows (gates table), with every field name re-derived from the merged schema.
 - Starts in `ForensicsTab.tsx`, `CaptureDetailsPanel.tsx`, `HeadersTlsTab.tsx` and
   `DataExplorer.tsx`; its wording matches CE-P step 5's `report.html`.
 
@@ -849,7 +860,11 @@ and CI-6 (and so after the Ruling 4 sign-off). Evidence call: no, with the backs
 - The maintainer ruled on its gates and open questions on 2026-10-10 (rulings 57 to 69) and
   approves it after reading #1805 (ruling 71). E23 is approved as proposed (ruling 59), and #1805
   applies it to the collaborative cases design. The four brief splits are taken (ruling 63):
-  CI-9b, CI-10a, CI-D1 with CI-D2, and CI-B. The briefs below follow the plan's Order of work.
+  CI-9b, CI-10a, CI-D1 with CI-D2, and CI-B. The briefs below follow the plan's Order of work
+  except in their waves. That table puts CI-9b in wave 4 beside CI-9, the brief it depends on.
+  This plan places each brief one wave after the briefs it depends on, so CI-9b, CI-10, CI-11,
+  CI-12, CI-13, CI-D1, CI-D2, CI-R, CI-S and CI-B each sit one wave later here than there.
+  #1805's table takes its waves from this plan, so it needs the same shift.
 
 **CI-8. Engine contract and fake engine (to file).** Wave 2, after CI-P is approved. Not
 evidence-affecting.
@@ -898,7 +913,8 @@ the evidence call when it is filed; the build service sits under `db/**`, so its
   fixtures, and the retrieval runner's index bytes and build time before and after are recorded in
   the retrieval assessment.
 
-**CI-10 to CI-13, CI-D1 and CI-D2. Engine.** Waves 6 to 8, as CI-P's Order of work sets them.
+**CI-10 to CI-13, CI-D1 and CI-D2. Engine.** Waves 6 to 8, one wave later than CI-P's Order of
+work table puts them (see CI-P).
 - CI-10, the base layer (wave 6, after CI-9b, CI-10a and CI-E's answer key): the base-layer
   package, the batch reader, identifier normalization, the four proposal rules, document
   Subjects, two-Joint expansion, holder counts, and the threshold sweeps. The rulings it carries:
@@ -929,10 +945,9 @@ the evidence call when it is filed; the build service sits under `db/**`, so its
   marks and Own Identifiers, with their services and IPC. Own Identifiers are stored per Case,
   and Settings lists them grouped by Persona and Case and writes to the Cases the Operator picks
   (ruling 60). The importing Operator may clear an imported flag as a recorded action (ruling 62).
-  CI-D1 is the first brief that lets an Operator set the flag, so it carries ruling 58: MCP tools
-  list a withheld Exhibit with its mark and never return its content or values drawn from it. The
-  PR audits every registered MCP tool, not only the seven CI-P names, and updates
-  `website/content/docs/mcp.mdx`.
+  CI-D1 is the first brief that lets an Operator set the flag, so, as CI-P's CI-D1 done-when has
+  it, `website/content/docs/mcp.mdx` states that MCP tools still return withheld Exhibits until
+  the brief that implements ruling 58 merges (see "MCP tools and Withheld from analysis").
 - CI-D2, Joint, span and Subject decisions (wave 6, after CI-9b): accept, reject, add and dismiss
   with the acceptance context and undo; Subjects added and kept by hand; and the same-name choice,
   moved from CI-R.
@@ -961,6 +976,14 @@ call when it is filed; it touches `db/**` (`searchCaptures`), so its PR carries
   `scripts/retrieval-eval/`; a third evaluation run shows the withheld Exhibit in Case search with
   its mark, and in no analysis query once the engine exists; and the results are appended to the
   retrieval first-slice assessment.
+
+**MCP tools and Withheld from analysis (to file).** Not in the waves yet. Depends on CI-9b, whose
+repository its tests seed the flag through, as CI-14's do. Triage makes the evidence call when it
+is filed.
+- Carries ruling 58, which names no brief: MCP tools list a withheld Exhibit with its mark and
+  never return its content or values drawn from it. The PR audits every registered MCP tool, not
+  only the seven CI-P names, and replaces CI-D1's sentence in `website/content/docs/mcp.mdx` with
+  the rule.
 
 **CI-S. Sync investigation records (to file).** Wave 7, after SC-2, CI-9b, CI-D1, CI-D2, CI-R
 and the merge of #1805, which applies the approved E23 amendment (ruling 59). The issue carries an
@@ -1008,10 +1031,11 @@ sent no such header.
 CI-V3 shows claim-check outcomes, which Ruling 4 treats as evidence-affecting; CI-V4 shows
 cannot-check and Integrity Status, and any edit to `ProvenanceBadge.tsx` or
 `getProvenanceColor.ts` trips the blocking backstop. Sizes are the feasibility assessment's.
-- CI-V1 (wave 3, after CI-8): the Investigate route, header S2 with the "not read" count from
-  CE-U's design (ruling 68), run setup S1, narrow window S7, and the token fixes. It registers the
-  route and components only; the `Sidebar.tsx` and command palette entries land in CI-V5
-  (ruling 57, option (a)). It lands first because it owns the route tree.
+- CI-V1 (wave 3, after CI-8 and, for the header count, CE-U's design): the Investigate route,
+  header S2 with the "not read" count from CE-U's design (ruling 68), run setup S1, narrow
+  window S7, and the token fixes. It registers the route and components only; the `Sidebar.tsx`
+  and command palette entries land in CI-V5 (ruling 57, option (a)). It lands first because it
+  owns the route tree.
 - CI-V2, CI-V3 and CI-V4 run in parallel in wave 4, after CI-V1.
   - CI-V2: map and list S3, with a pure layout module like `backlinkMapModel.ts` and the map
     accessibility fix.
