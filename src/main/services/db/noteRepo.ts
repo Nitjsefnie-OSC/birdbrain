@@ -2,6 +2,7 @@ import { v4 as uuid } from 'uuid'
 import type { Note } from '@shared/types'
 import type { CreateNoteParams, UpdateNoteParams } from '@shared/ipc'
 import { getDb, withTransaction, type ImportCtx } from '@main/services/db/core'
+import { toFtsMatchQuery } from '@main/services/db/ftsQuery'
 import {
   extractNoteMentions,
   noteDocToText,
@@ -238,6 +239,9 @@ export function getNoteCount(caseId: string): number {
   return row.count
 }
 
+// The notes_fts columns, so a column filter such as `title:` survives query preparation.
+const NOTES_FTS_COLUMNS = ['title', 'body']
+
 export function searchNotes(caseId: string, query: string): Note[] {
   if (!query.trim()) return []
   const rows = getDb()
@@ -247,7 +251,7 @@ export function searchNotes(caseId: string, query: string): Note[] {
        WHERE notes_fts MATCH ? AND n.case_id = ?
        ORDER BY rank`
     )
-    .all(query, caseId) as Array<Record<string, unknown>>
+    .all(toFtsMatchQuery(query, NOTES_FTS_COLUMNS), caseId) as Array<Record<string, unknown>>
   return rows.map(rowToNote)
 }
 
