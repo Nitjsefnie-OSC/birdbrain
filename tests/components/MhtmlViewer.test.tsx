@@ -306,6 +306,17 @@ describe('MhtmlViewer', () => {
     })
   })
 
+  it('shows a failed archive lookup in the danger token and mounts no guest', async () => {
+    fakeBridge({
+      captures: { getMhtmlUrl: vi.fn().mockRejectedValue(new Error('archive missing')) }
+    })
+    renderViewer()
+
+    const message = await screen.findByText('Error: archive missing')
+    expect(message.className).toContain('text-danger-fg')
+    expect(screen.queryByTestId('mhtml-viewer')).toBeNull()
+  })
+
   // The `captures:getMhtmlUrl` handler answers null for a capture whose file is gone,
   // and this viewer has no state for that: the null lands on the
   // same `!fileUrl` branch as a query still in flight, so a missing archive reads as a

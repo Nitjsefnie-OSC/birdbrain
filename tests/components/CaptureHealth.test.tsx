@@ -120,6 +120,50 @@ describe('CaptureHealth', () => {
   })
 })
 
+describe('pipeline event colors', () => {
+  // The light theme's raw palette text fell under 4.5:1, so each state draws from a
+  // theme token. A skip reason reads as plain text with the amber left on its icon; a
+  // stored event's warnings keep the warning token because its icon is the green check.
+  it('draws each event state in its theme token', () => {
+    const event = (type: CaptureEvent['type'], extra: Partial<CaptureEvent> = {}) => ({
+      ...storedEvent,
+      type,
+      url: `https://example.org/${type}`,
+      ...extra
+    })
+    useAppStore.setState({
+      captureEvents: [
+        event('stored'),
+        event('stored', {
+          url: 'https://example.org/login-wall',
+          warning: 'Page looks like a login wall',
+          screenshotWarning: 'Screenshot dropped'
+        }),
+        event('failed', { error: 'server refused' }),
+        event('skipped', { skipReason: 'ignored host' }),
+        event('received')
+      ]
+    })
+    renderHealth()
+    openPopover()
+
+    const iconClass = (type: string) =>
+      screen
+        .getByText(`https://example.org/${type}`)
+        .closest('.items-start')
+        ?.querySelector('svg')
+        ?.getAttribute('class')
+    expect(iconClass('stored')).toContain('text-success-fg')
+    expect(iconClass('failed')).toContain('text-danger-fg')
+    expect(iconClass('skipped')).toContain('text-warning-fg')
+    expect(iconClass('received')).toContain('text-accent')
+    expect(screen.getByText('server refused').className).toBe('text-danger-fg')
+    expect(screen.getByText('ignored host').className).toBe('text-text-secondary')
+    expect(screen.getByText('Page looks like a login wall').className).toBe('text-warning-fg')
+    expect(screen.getByText('Screenshot dropped').className).toBe('text-warning-fg')
+  })
+})
+
 describe('pipeline event context menu', () => {
   const get = vi.fn()
   const enqueueCaptures = vi.fn()
