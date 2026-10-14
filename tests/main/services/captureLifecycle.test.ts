@@ -51,6 +51,8 @@ import {
   initLogger,
   readRecentEntries
 } from '@main/services/logger'
+import * as searchFieldRepo from '@main/services/db/searchFieldRepo'
+import { getExhibitSearchBuild } from '@main/services/db/searchFieldRepo'
 
 // Keep ingest tests hermetic: the corroboration-only TLS re-fetch (#123) would
 // otherwise open a real socket to https://example.com on every ingest. Default
@@ -433,6 +435,106 @@ describe('createCaptureLifecycle.ingest', () => {
       entries.some(
         (e) =>
           e.source === 'captureLifecycle' && e.code === 'captureLifecycle.selector_match_failed'
+      )
+    ).toBe(true)
+  })
+
+  // Case search field records (docs/plans/2026-10-09-case-retrieval-first-slice.md, D5).
+  it('builds the Case search field records from the stored files on the next tick', async () => {
+    const lifecycle = createCaptureLifecycle({ selectorLifecycle: selectorStub })
+    const body = Buffer.from(
+      [
+        'MIME-Version: 1.0',
+        'Content-Type: multipart/related; type="text/html"; boundary="B"',
+        '',
+        '--B',
+        'Content-Type: text/html',
+        'Content-Location: https://example.com',
+        '',
+        '<a href="https://larkspur-relay.example.net/x">x</a>',
+        '--B--',
+        ''
+      ].join('\r\n')
+    )
+    const textContent = 'From: Ada Pell <ada@pell.example.org>\nMessage-ID: <m1@pell>\n'
+    const { capture, contentHash } = await lifecycle.ingest(
+      buildIngestParams(caseId, body, { textContent })
+    )
+    expect(getExhibitSearchBuild(capture.id)).toBeUndefined()
+
+    await flushImmediate()
+
+    expect(getExhibitSearchBuild(capture.id)).toMatchObject({
+      outcome: 'built',
+      contentHash,
+      textHash: createHash('sha256').update(Buffer.from(textContent, 'utf-8')).digest('hex')
+    })
+    const norms = getDb()
+      .prepare('SELECT field, norm FROM exhibit_search_fields WHERE exhibit_id = ? ORDER BY id')
+      .all(capture.id)
+    expect(norms).toEqual([
+      { field: 'header.from', norm: 'ada@pell.example.org' },
+      { field: 'header.message-id', norm: '<m1@pell>' },
+      { field: 'link.href', norm: 'https://larkspur-relay.example.net/x' }
+    ])
+  })
+
+  it('logs a field build the database refuses, and the ingest still stands', async () => {
+    vi.spyOn(searchFieldRepo, 'replaceExhibitFields').mockImplementation(() => {
+      throw new Error('database is locked')
+    })
+    const lifecycle = createCaptureLifecycle({ selectorLifecycle: selectorStub })
+
+    const result = await lifecycle.ingest(buildIngestParams(caseId, Buffer.from('mhtml-body')))
+    await flushImmediate()
+
+    expect(getCapture(result.capture.id)?.id).toBe(result.capture.id)
+    flushLogger()
+    expect(
+      readRecentEntries(10).some(
+        (e) => e.source === 'captureLifecycle' && e.code === 'searchFields.build_failed'
+      )
+    ).toBe(true)
+  })
+
+  it('reprocessing a Case builds the field records its Captures lack', async () => {
+    const lifecycle = createCaptureLifecycle({ selectorLifecycle: selectorStub })
+    const { capture } = await lifecycle.ingest(buildIngestParams(caseId, Buffer.from('mhtml-body')))
+    await flushImmediate()
+    getDb().prepare('DELETE FROM exhibit_search_builds WHERE exhibit_id = ?').run(capture.id)
+
+    expect(await lifecycle.reprocessCase(caseId)).toEqual({ processed: 1 })
+
+    expect(getExhibitSearchBuild(capture.id)?.outcome).toBe('built')
+  })
+
+  it('reprocessing a Case retries a field build that failed', async () => {
+    const lifecycle = createCaptureLifecycle({ selectorLifecycle: selectorStub })
+    const { capture } = await lifecycle.ingest(buildIngestParams(caseId, Buffer.from('mhtml-body')))
+    await flushImmediate()
+    getDb()
+      .prepare("UPDATE exhibit_search_builds SET outcome = 'failed' WHERE exhibit_id = ?")
+      .run(capture.id)
+
+    await lifecycle.reprocessCase(caseId)
+
+    expect(getExhibitSearchBuild(capture.id)?.outcome).toBe('built')
+  })
+
+  it('logs a field pass reprocess cannot start, and reprocess still reports its Captures', async () => {
+    const lifecycle = createCaptureLifecycle({ selectorLifecycle: selectorStub })
+    await lifecycle.ingest(buildIngestParams(caseId, Buffer.from('mhtml-body')))
+    await flushImmediate()
+    vi.spyOn(searchFieldRepo, 'listCaseCaptureExhibits').mockImplementationOnce(() => {
+      throw new Error('database is locked')
+    })
+
+    expect(await lifecycle.reprocessCase(caseId)).toEqual({ processed: 1 })
+
+    flushLogger()
+    expect(
+      readRecentEntries(10).some(
+        (e) => e.source === 'captureLifecycle' && e.code === 'searchFields.ensure_failed'
       )
     ).toBe(true)
   })

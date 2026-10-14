@@ -10,6 +10,7 @@ import * as extractedDataRepo from '@main/services/db/extractedDataRepo'
 import { extractData } from '@main/services/dataExtractor'
 import { recordSlowOp } from '@main/services/diagnostics'
 import { readExtractionHtml } from '@main/services/extraction/extractionSource'
+import { buildExhibitFields, rebuildCaseFields } from '@main/services/search/fieldIndex'
 import { getInstallationId } from '@main/services/installationId'
 import {
   authorChainOf,
@@ -746,6 +747,25 @@ export function createCaptureLifecycle(deps: CaptureLifecycleDeps): CaptureLifec
     }
   }
 
+  // The Case search field records (docs/plans/2026-10-09-case-retrieval-first-slice.md,
+  // D5). Timed for the same reason as data extraction. A failure never fails the
+  // ingest: the build writes a `failed` row, and a database fault is logged here.
+  function runFieldBuild(captureId: string, url: string): void {
+    const t0 = performance.now()
+    try {
+      buildExhibitFields(captureId, store)
+    } catch (err) {
+      logger.error(
+        'captureLifecycle',
+        'searchFields.build_failed',
+        { captureId: ident(captureId) },
+        err
+      )
+    } finally {
+      recordSlowOp('field-index', url, performance.now() - t0)
+    }
+  }
+
   function runPostCaptureWork(
     captureId: string,
     caseId: string,
@@ -767,6 +787,7 @@ export function createCaptureLifecycle(deps: CaptureLifecycleDeps): CaptureLifec
       }
 
       runDataExtraction(captureId, caseId, url)
+      runFieldBuild(captureId, url)
     })
   }
 
@@ -1356,6 +1377,9 @@ export function createCaptureLifecycle(deps: CaptureLifecycleDeps): CaptureLifec
               reconcileErr
             )
           }
+          // A copy is a new Exhibit with search field records of its own. Ingest builds
+          // them in runPostCaptureWork, which a duplicate does not run.
+          setImmediate(() => runFieldBuild(duplicateId, sourceEntry.url))
           return { status: 'duplicated', capture: captureRepo.getCapture(duplicateId) ?? capture }
         } catch (err) {
           // Pre-commit only: the manifest seam has already rolled its own entry
@@ -1406,6 +1430,19 @@ export function createCaptureLifecycle(deps: CaptureLifecycleDeps): CaptureLifec
             err
           )
         }
+      }
+      // Reprocess redoes the search field records too, so a failed build gets its
+      // retry here. A pass that cannot start is logged rather than thrown, since the
+      // extraction above has finished and the caller should not see reprocess fail.
+      try {
+        await rebuildCaseFields(caseId, store)
+      } catch (err) {
+        logger.error(
+          'captureLifecycle',
+          'searchFields.ensure_failed',
+          { caseId: ident(caseId) },
+          err
+        )
       }
       return { processed: captures.length }
     }

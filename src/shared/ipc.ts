@@ -71,6 +71,7 @@ export const IPC_CHANNELS = {
   CASES_RECENT_ACTIVITY: 'cases:recentActivity',
   CASES_GET_AUTO_CAPTURE_POLICY: 'cases:getAutoCapturePolicy',
   CASES_SET_AUTO_CAPTURE_POLICY: 'cases:setAutoCapturePolicy',
+  CASES_ENSURE_SEARCH_FIELDS: 'cases:ensureSearchFields',
 
   // Captures
   CAPTURES_LIST: 'captures:list',
@@ -668,6 +669,24 @@ export type BatchDeleteOutcome =
   | { captureId: string; status: 'not_attempted' }
   | { captureId: string; status: 'rejected'; reason: 'not_found' | 'duplicate' }
 
+// What a Case search field pass did with each Exhibit: built fields from its stored
+// files, did not find its stored page, or failed.
+export interface FieldBuildSummary {
+  indexed: number
+  noSource: number
+  failed: number
+}
+
+// The rebuild in Settings -> Database: the Extracted Text and Notes indexes, then the
+// Case search field records (ADR-0044).
+export interface DbRebuildFtsResult {
+  rowsIndexed: number
+  textsHealed: number
+  fieldExhibitsIndexed: number
+  fieldExhibitsNoSource: number
+  fieldExhibitsFailed: number
+}
+
 export interface BatchDeleteResult {
   // Exactly one per requested id, in input order.
   outcomes: BatchDeleteOutcome[]
@@ -780,6 +799,7 @@ export interface IpcInvokeContract {
     args: [params: SetAutoCapturePolicyParams]
     result: CaseAutoCapturePolicy
   }
+  'cases:ensureSearchFields': { args: [caseId: string]; result: FieldBuildSummary }
 
   'captures:list': { args: [caseId: string]; result: Capture[] }
   'captures:get': { args: [id: string]; result: Capture | undefined }
@@ -946,7 +966,7 @@ export interface IpcInvokeContract {
   'db:updateRow': { args: [params: DbUpdateRowParams]; result: boolean }
   'db:deleteRow': { args: [params: DbRowIdentifier]; result: boolean }
   'db:vacuum': { args: []; result: { freedBytes: number } }
-  'db:rebuildFts': { args: []; result: { rowsIndexed: number; textsHealed: number } }
+  'db:rebuildFts': { args: []; result: DbRebuildFtsResult }
   'db:integrityCheck': { args: []; result: { ok: boolean; issues: string[] } }
   'db:purgeArchived': { args: []; result: { casesDeleted: number; capturesDeleted: number } }
   'db:findOrphans': { args: []; result: OrphanReport }
