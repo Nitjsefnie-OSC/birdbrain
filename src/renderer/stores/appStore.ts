@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { CaptureEvent } from '@shared/types'
+import type { CaptureEvent, FieldHit } from '@shared/types'
 
 // The viewer's tab lives in the store rather than in CaptureViewer because the
 // captures route has to know about it: the Wayback tab takes the full width,
@@ -69,6 +69,11 @@ interface AppState {
   // an ancestor of the other. Never a Capture: it is a replay URL and the time
   // archive.org states for it, held only for as long as the panel is open.
   waybackSelection: WaybackSelection | null
+  // The search hit the viewer shows (docs/plans/2026-10-09-case-retrieval-first-slice.md,
+  // D7): the Text tab marks a header hit's span, and the Links tab a link hit's rows.
+  // Keyed by its Exhibit, which is the Capture's id. Selecting another Capture, or none,
+  // drops it.
+  viewerHit: FieldHit | null
 
   setSessionActive: (active: boolean) => void
   setConnectedToExtension: (connected: boolean) => void
@@ -79,6 +84,7 @@ interface AppState {
   setPanelCollapsedForced: (forced: boolean) => void
   setActiveViewerTab: (tab: CaptureViewerTab) => void
   setWaybackSelection: (selection: WaybackSelection | null) => void
+  setViewerHit: (hit: FieldHit | null) => void
   setSelectedCaptureId: (id: string | null) => void
   setSelectedNoteId: (id: string | null) => void
   setSelectedSignalId: (id: string | null) => void
@@ -103,6 +109,13 @@ interface AppState {
   clearCaptureEvents: () => void
 }
 
+function selectedCaptureState(id: string | null) {
+  return ({ viewerHit }: AppState) => ({
+    selectedCaptureId: id,
+    viewerHit: viewerHit?.exhibitId === id ? viewerHit : null
+  })
+}
+
 export const useAppStore = create<AppState>((set) => ({
   sessionActive: false,
   connectedToExtension: false,
@@ -125,6 +138,7 @@ export const useAppStore = create<AppState>((set) => ({
   panelCollapsedForced: false,
   activeViewerTab: 'screenshot',
   waybackSelection: null,
+  viewerHit: null,
 
   setSessionActive: (active) => set({ sessionActive: active }),
   setConnectedToExtension: (connected) => set({ connectedToExtension: connected }),
@@ -137,12 +151,13 @@ export const useAppStore = create<AppState>((set) => ({
   setPanelCollapsedForced: (forced) => set({ panelCollapsedForced: forced }),
   setActiveViewerTab: (tab) => set({ activeViewerTab: tab }),
   setWaybackSelection: (selection) => set({ waybackSelection: selection }),
-  setSelectedCaptureId: (id) => set({ selectedCaptureId: id }),
+  setViewerHit: (hit) => set({ viewerHit: hit }),
+  setSelectedCaptureId: (id) => set(selectedCaptureState(id)),
   setSelectedNoteId: (id) => set({ selectedNoteId: id }),
   setSelectedSignalId: (id) => set({ selectedSignalId: id }),
   setSearchQuery: (query) => set({ searchQuery: query }),
 
-  selectCapture: (id) => set({ selectedCaptureId: id }),
+  selectCapture: (id) => set(selectedCaptureState(id)),
 
   toggleCaptureSelection: (id) =>
     set((s) => {

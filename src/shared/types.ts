@@ -171,6 +171,52 @@ export interface CaptureLinks {
   mainDocumentSkipped: boolean
 }
 
+// A Case search field hit (docs/plans/2026-10-09-case-retrieval-first-slice.md, D6): one
+// record for each field and value in an Exhibit, the first in the stored file, with the
+// span it came from.
+export interface FieldHit {
+  /** The field record, which the exact check reads. */
+  fieldId: number
+  caseId: string
+  exhibitId: string
+  exhibitNumber: number
+  exhibitCitation: string
+  contentHash: string
+  /** The Capture's title. */
+  title: string
+  /** `link.href`, `link.alt`, or `header.<name in lower case>`. */
+  field: string
+  /** The span as stored, cut to its first 200 characters. */
+  preview: string
+  /** The search form the query matched. */
+  norm: string
+  /** How many records in this Exhibit have the same field and search form. */
+  occurrences: number
+  locator: {
+    /** `html-part`: a text/html part of the stored page; `text`: the Extracted Text file. */
+    source: 'html-part' | 'text'
+    /** The part in file order, 0 for a legacy `.html` Capture's file; null for text. */
+    part: number | null
+    /** UTF-16 code units into the decoded part, or into the `.txt` file read as UTF-8. */
+    startOffset: number
+    endOffset: number
+    /** The extractor version that recorded the span. */
+    extractor: string
+  }
+}
+
+export interface FieldSearchResult {
+  hits: FieldHit[]
+  /**
+   * Exhibits whose matching records are not returned as hits because their build row
+   * records another Content Hash. `searchCaseFields` states the rule and what it leaves
+   * unchecked.
+   */
+  unavailable: Array<{ exhibitId: string; exhibitCitation: string }>
+  /** More hits matched than the result holds. */
+  truncated: boolean
+}
+
 export interface Capture {
   id: string
   caseId: string
@@ -749,6 +795,9 @@ export const LOG_CODES = [
   // since no build row records it.
   'searchFields.build_failed',
   'searchFields.ensure_failed',
+  // A field search that threw: the search bar says the search could not run, and this
+  // line holds the error.
+  'searchFields.search_failed',
   'searchFields.source_missing'
 ] as const
 export type LogCode = (typeof LOG_CODES)[number]
