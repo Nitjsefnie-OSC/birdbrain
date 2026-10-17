@@ -3,6 +3,7 @@ import { writeFileSync } from 'fs'
 import sharp from 'sharp'
 import { trimTrailingBackground, renderPageInHiddenWindow } from '@main/services/backgroundRenderer'
 import { RefusedAddressError } from '@main/services/localAddressPolicy'
+import { EgressUnavailableError } from '@main/services/egress'
 import type { EgressSetting } from '@shared/types'
 
 // Mutable harness the fake BrowserWindow/webContents read from, so each test can
@@ -170,10 +171,14 @@ vi.mock('electron', () => ({
   app: { getPath: vi.fn(() => '/tmp') }
 }))
 
-vi.mock('@main/services/egress', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@main/services/egress')>()),
-  currentEgress: () => ctl.egress
-}))
+vi.mock('@main/services/egress', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@main/services/egress')>()
+  return {
+    ...actual,
+    currentEgress: () => ctl.egress,
+    knownEgress: (egress: EgressSetting = ctl.egress) => actual.knownEgress(egress)
+  }
+})
 
 vi.mock('@main/services/consentBlocker', () => ({
   getConsentBlocker: vi.fn(async () => ctl.blocker)
@@ -485,5 +490,16 @@ describe('renderPageInHiddenWindow', () => {
     await expect(
       renderPageInHiddenWindow('https://example.test/', { timeoutMs: 30_000 })
     ).rejects.toThrow(/^ERR_NAME_NOT_RESOLVED/)
+  }, 30_000)
+  it('makes no window and sends nothing while the saved Egress cannot be read', async () => {
+    ctl.egress = { kind: 'unavailable' }
+    const before = ctl.createdWindows
+
+    await expect(
+      renderPageInHiddenWindow('https://example.test/', { timeoutMs: 30_000 })
+    ).rejects.toThrow(EgressUnavailableError)
+
+    expect(ctl.createdWindows).toBe(before)
+    expect(ctl.calls).toEqual([])
   }, 30_000)
 })

@@ -97,6 +97,79 @@ describe('settings', () => {
       expect(getSettings().egress).toEqual(tor)
     })
 
+    // ADR-0032 rule 2 and the #1169 reading of an unknown privacy preference: an
+    // Egress the file no longer shows is unavailable, never Direct.
+    describe('when the saved Egress cannot be known', () => {
+      it.skipIf(process.getuid?.() === 0)('a file that cannot be read gives unavailable', () => {
+        writeFileSync(settingsFile, JSON.stringify({ egress: tor }), 'utf-8')
+        chmodSync(settingsFile, 0o000)
+        try {
+          expect(getSettings().egress).toEqual({ kind: 'unavailable' })
+        } finally {
+          chmodSync(settingsFile, 0o600)
+        }
+        expect(getSettings().egress).toEqual(tor)
+      })
+
+      it('a file that will not parse gives unavailable', () => {
+        writeFileSync(settingsFile, '{"egress": {"kind": "tor", "proxyUrl": "socks5://127', 'utf-8')
+        expect(getSettings().egress).toEqual({ kind: 'unavailable' })
+      })
+
+      it('a file whose Egress no longer parses gives unavailable', () => {
+        writeFileSync(
+          settingsFile,
+          JSON.stringify({
+            egress: { kind: 'tor', proxyUrl: 'socks4://127.0.0.1:9050', label: '' }
+          })
+        )
+        expect(getSettings().egress).toEqual({ kind: 'unavailable' })
+      })
+
+      it('keeps a legible Egress when another key fails the schema', () => {
+        writeFileSync(settingsFile, JSON.stringify({ theme: 'purple', egress: tor }))
+        expect(getSettings().egress).toEqual(tor)
+        writeFileSync(settingsFile, JSON.stringify({ theme: 'purple' }))
+        expect(getSettings().egress).toEqual({ kind: 'direct' })
+      })
+
+      it('keeps unavailable through a save until the Operator chooses an Egress', () => {
+        writeFileSync(settingsFile, 'not json at all', 'utf-8')
+        updateSettings({ operatorName: 'Matt' })
+        expect(JSON.parse(readFileSync(settingsFile, 'utf-8')).egress).toEqual({
+          kind: 'unavailable'
+        })
+        expect(getSettings()).toMatchObject({
+          operatorName: 'Matt',
+          egress: { kind: 'unavailable' }
+        })
+        updateSettings({ egress: { kind: 'direct' } })
+        expect(getSettings().egress).toEqual({ kind: 'direct' })
+      })
+
+      it('refuses unavailable as an edit', () => {
+        expect(() =>
+          updateSettings({ egress: { kind: 'unavailable' } } as unknown as Parameters<
+            typeof updateSettings
+          >[0])
+        ).toThrow(InvalidSettingsError)
+      })
+    })
+
+    it.each([
+      ['socks5://http=x;y:9050', /host name or an IP address/],
+      ['socks5://a;b:1080', /host name or an IP address/]
+    ])('refuses %s, which Chromium would read as proxy rules', (proxyUrl, message) => {
+      expect(() => updateSettings({ egress: { kind: 'tor', proxyUrl, label: '' } })).toThrow(
+        message
+      )
+    })
+
+    it('takes an http proxy on port 80, which URL reports as no port', () => {
+      updateSettings({ egress: { kind: 'proxy', proxyUrl: 'http://proxy.example:80', label: '' } })
+      expect(getSettings().egress).toMatchObject({ proxyUrl: 'http://proxy.example:80' })
+    })
+
     it('takes only a socks5 address for Tor', () => {
       expect(() =>
         updateSettings({ egress: { kind: 'tor', proxyUrl: 'http://127.0.0.1:8118', label: '' } })

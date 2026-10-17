@@ -181,7 +181,7 @@ test.describe('Recapture through the Egress', () => {
     expect(seen.slice(before)).toEqual([])
   })
 
-  test('puts the stopped proxy on the update session, so an update request fails', async ({
+  test('puts the stopped proxy on the update and Wayback sessions, so an update request fails', async ({
     page,
     electronApp
   }) => {
@@ -196,6 +196,16 @@ test.describe('Recapture through the Egress', () => {
           ({ session }, url) =>
             session.fromPartition('electron-updater', { cache: false }).resolveProxy(url),
           `${targetUrl}/latest.yml`
+        )
+      )
+      .toBe(`SOCKS5 127.0.0.1:${port}`)
+
+    // The Wayback replay partition takes the same proxy.
+    await expect
+      .poll(() =>
+        electronApp.evaluate(
+          ({ session }, url) => session.fromPartition('wayback-replay').resolveProxy(url),
+          'https://web.archive.org/'
         )
       )
       .toBe(`SOCKS5 127.0.0.1:${port}`)

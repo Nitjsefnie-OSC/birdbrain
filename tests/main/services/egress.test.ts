@@ -21,8 +21,12 @@ vi.mock('@main/services/settings', () => ({ getSettings: () => ({ egress: ctl.eg
 import {
   applyEgressToSession,
   captureEgressOf,
+  createRoutedSession,
   egressFetch,
-  proxyConfigFor
+  EgressUnavailableError,
+  knownEgress,
+  proxyConfigFor,
+  webRtcPolicyFor
 } from '@main/services/egress'
 
 const tor: EgressSetting = {
@@ -117,5 +121,107 @@ describe('egressFetch', () => {
     await expect(egressFetch('https://d.example/')).rejects.toThrow('bad proxy rules')
     expect(ctl.sessionFetch).not.toHaveBeenCalled()
     expect(globalFetch).not.toHaveBeenCalled()
+  })
+})
+
+describe('the unavailable Egress (ADR-0032 rule 2)', () => {
+  let globalFetch: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    ctl.sessionFetch.mockReset()
+    globalFetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('direct'))
+  })
+
+  afterEach(() => {
+    globalFetch.mockRestore()
+  })
+
+  it('refuses to name a route', () => {
+    expect(() => knownEgress({ kind: 'unavailable' })).toThrow(EgressUnavailableError)
+    expect(knownEgress(tor)).toBe(tor)
+  })
+
+  it('makes egressFetch fail before anything is sent', async () => {
+    ctl.egress = { kind: 'unavailable' }
+    await expect(egressFetch('https://web.archive.org/cdx')).rejects.toThrow(EgressUnavailableError)
+    expect(globalFetch).not.toHaveBeenCalled()
+    expect(ctl.sessionFetch).not.toHaveBeenCalled()
+  })
+})
+
+describe('webRtcPolicyFor', () => {
+  it('keeps UDP inside the proxy unless the Egress is Direct', () => {
+    expect(webRtcPolicyFor({ kind: 'direct' })).toBe('default')
+    expect(webRtcPolicyFor(tor)).toBe('disable_non_proxied_udp')
+    expect(webRtcPolicyFor({ kind: 'unavailable' })).toBe('disable_non_proxied_udp')
+  })
+})
+
+describe('createRoutedSession', () => {
+  function fakeSession() {
+    const pending: Array<{ resolve: () => void; reject: (err: Error) => void }> = []
+    const setProxy = vi.fn(
+      () => new Promise<void>((resolve, reject) => pending.push({ resolve, reject }))
+    )
+    return { session: { setProxy } as unknown as Electron.Session, setProxy, pending }
+  }
+  const flush = () => new Promise((resolve) => setImmediate(resolve))
+
+  it('leaves a session Direct since creation untouched and open', () => {
+    const { session, setProxy } = fakeSession()
+    const route = createRoutedSession(session, vi.fn(), () => ({ kind: 'direct' }))
+    expect(route.allowsRequests()).toBe(true)
+    expect(setProxy).not.toHaveBeenCalled()
+  })
+
+  it('refuses requests until the current proxy is on the session', async () => {
+    const { session, setProxy, pending } = fakeSession()
+    const route = createRoutedSession(session, vi.fn(), () => tor)
+    expect(setProxy).toHaveBeenCalledWith(proxyConfigFor(tor))
+    expect(route.allowsRequests()).toBe(false)
+    pending[0].resolve()
+    await flush()
+    expect(route.allowsRequests()).toBe(true)
+  })
+
+  it('closes on a change of setting until the new route is applied, Direct included', async () => {
+    let egress: EgressSetting = tor
+    const { session, setProxy, pending } = fakeSession()
+    const route = createRoutedSession(session, vi.fn(), () => egress)
+    pending[0].resolve()
+    await flush()
+    egress = { kind: 'direct' }
+    route.sync(egress)
+    expect(route.allowsRequests()).toBe(false)
+    expect(setProxy).toHaveBeenLastCalledWith({ mode: 'direct' })
+    pending[1].resolve()
+    await flush()
+    expect(route.allowsRequests()).toBe(true)
+  })
+
+  it('stays closed while the setting is unreadable, and opens once it reads again', async () => {
+    let egress: EgressSetting = { kind: 'unavailable' }
+    const { session, setProxy, pending } = fakeSession()
+    const route = createRoutedSession(session, vi.fn(), () => egress)
+    expect(route.allowsRequests()).toBe(false)
+    expect(setProxy).not.toHaveBeenCalled()
+    egress = tor
+    expect(route.allowsRequests()).toBe(false)
+    expect(setProxy).toHaveBeenCalledTimes(1)
+    pending[0].resolve()
+    await flush()
+    expect(route.allowsRequests()).toBe(true)
+  })
+
+  it('stays closed after the session refuses a proxy, and does not retry it on every request', async () => {
+    const onApplyFailed = vi.fn()
+    const { session, setProxy, pending } = fakeSession()
+    const route = createRoutedSession(session, onApplyFailed, () => tor)
+    pending[0].reject(new Error('bad proxy rules'))
+    await flush()
+    expect(onApplyFailed).toHaveBeenCalledTimes(1)
+    expect(route.allowsRequests()).toBe(false)
+    expect(route.allowsRequests()).toBe(false)
+    expect(setProxy).toHaveBeenCalledTimes(1)
   })
 })

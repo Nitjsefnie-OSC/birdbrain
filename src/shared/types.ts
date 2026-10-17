@@ -438,8 +438,8 @@ export interface BirdbrainSettings {
   // version's prerelease suffix in initSettings().
   releaseChannel: ReleaseChannel
   autoCheckForUpdates: boolean
-  // Where everything Birdbrain sends leaves from (ADR-0032). One setting for the
-  // installation; while it is not Direct nothing Birdbrain sends leaves directly.
+  // Where Birdbrain's own traffic leaves from (ADR-0032). One setting for the
+  // installation.
   egress: EgressSetting
 }
 
@@ -447,7 +447,15 @@ export interface BirdbrainSettings {
 // login, as a normalised `scheme://host:port`; `label` is the Operator's own name
 // for it ('' for none), which a Capture rendered through it records.
 export type EgressSetting =
-  { kind: 'direct' } | { kind: EgressKind; proxyUrl: string; label: string }
+  | { kind: 'direct' }
+  | { kind: EgressKind; proxyUrl: string; label: string }
+  // The saved Egress could not be read. An unknown privacy preference takes the
+  // restrictive reading (#1169), and the Egress fails closed (ADR-0032 rule 2):
+  // nothing goes out on the routes it governs until the Operator chooses one.
+  | { kind: 'unavailable' }
+
+// An Egress Birdbrain can route by.
+export type KnownEgress = Exclude<EgressSetting, { kind: 'unavailable' }>
 
 // Update-delivery state machine surfaced to the renderer. Phase 1 (notify) only
 // ever reaches idle → checking → up-to-date | available | error; the

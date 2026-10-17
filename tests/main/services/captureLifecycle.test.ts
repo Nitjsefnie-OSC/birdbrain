@@ -433,6 +433,19 @@ describe('createCaptureLifecycle.ingest', () => {
       expect(lastEntry().tlsSkipped).toBe('egress-not-direct')
     })
 
+    it('skips the re-fetch while the saved Egress cannot be read', async () => {
+      writeFileSync(join(tempDir, 'settings.json'), 'not json', 'utf-8')
+      const fetchTlsCertChain = vi.fn(async () => null)
+      const lifecycle = createCaptureLifecycle({
+        selectorLifecycle: selectorStub,
+        fetchTlsCertChain
+      })
+      await lifecycle.ingest(buildIngestParams(caseId, Buffer.from('mhtml-body')))
+
+      expect(fetchTlsCertChain).not.toHaveBeenCalled()
+      expect(lastEntry().tlsSkipped).toBe('egress-not-direct')
+    })
+
     it('leaves a Direct capture exactly as before: the re-fetch runs and no Egress field is written', async () => {
       const fetchTlsCertChain = vi.fn(async () => null)
       const lifecycle = createCaptureLifecycle({
