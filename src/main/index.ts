@@ -38,10 +38,12 @@ import {
   sanitizeWebviewPreferences,
   webviewPolicyFor,
   MHTML_PARTITION,
+  WAYBACK_PARTITION,
   WEBVIEW_PARTITIONS
 } from '@main/webviewPolicy'
 import { forwardGuestMouseDown } from '@main/guestMouseDown'
-import { initSettings, getSettings, onThemeChange } from '@main/services/settings'
+import { initSettings, getSettings, onEgressChange, onThemeChange } from '@main/services/settings'
+import { applyEgressToSession } from '@main/services/egress'
 import { titleBarOptions, titleBarOverlay, windowBackgroundColor } from '@main/windowChrome'
 import { initInstallationId, getInstallationId } from '@main/services/installationId'
 import { initSigningKey, SigningKeyUnacknowledgedError } from '@main/services/signingKey'
@@ -631,7 +633,8 @@ if (!gotSingleInstanceLock) {
           }
         },
         getChannel: () => getSettings().releaseChannel,
-        isAutoCheckEnabled: () => getSettings().autoCheckForUpdates
+        isAutoCheckEnabled: () => getSettings().autoCheckForUpdates,
+        getEgress: () => getSettings().egress
       })
 
       // Register IPC handlers
@@ -650,6 +653,17 @@ if (!gotSingleInstanceLock) {
       // present as ready to capture while silently receiving nothing.
       await startCaptureServer({ selectorLifecycle, captureLifecycle, sessionService })
       startExtensionConnectionCheck()
+
+      // The Wayback replay pane follows the Egress (ADR-0032). Applied before the
+      // window exists, so no replay loads ahead of its proxy, and again on every
+      // change. A partition the Egress has been Direct on since launch is left alone.
+      const waybackSession = electronSession.fromPartition(WAYBACK_PARTITION)
+      const applyWaybackEgress = (egress = getSettings().egress) =>
+        applyEgressToSession(waybackSession, egress).catch((err) => {
+          logger.error('app', 'app.egress_apply_failed', undefined, err)
+        })
+      if (getSettings().egress.kind !== 'direct') await applyWaybackEgress()
+      onEgressChange((egress) => void applyWaybackEgress(egress))
 
       // Create window and connect to capture server
       const win = createWindow()

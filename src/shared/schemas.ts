@@ -1168,6 +1168,69 @@ const TsaUrlEditSchema = z.string().transform((value, ctx) => {
   return url
 })
 
+export type ProxyUrlParse = { ok: true; url: string } | { ok: false; reason: string }
+
+// The one definition of a usable Egress proxy address (ADR-0032 rule 2), shared
+// by the settings load and edit paths and the Settings pane. SOCKS5 or HTTP only:
+// SOCKS4 resolves site names on this computer, and `socks://` is SOCKS4 to
+// Chromium. No user name or password, because Chromium cannot log in to a SOCKS5
+// proxy and Birdbrain stores no passwords. The address is returned as
+// `scheme://host:port`, the form Chromium's proxy rules take.
+export function parseProxyUrl(value: string): ProxyUrlParse {
+  const trimmed = value.trim()
+  if (!trimmed) return { ok: false, reason: 'Enter the proxy address, as socks5://host:port.' }
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  } catch {
+    return { ok: false, reason: 'Not a proxy address. Use socks5://host:port or http://host:port.' }
+  }
+  const { protocol, username, password, hostname, port, pathname, search, hash } = parsed
+  if (protocol === 'socks4:' || protocol === 'socks4a:' || protocol === 'socks:') {
+    return { ok: false, reason: 'SOCKS4 resolves site names on this computer. Use socks5://.' }
+  }
+  if (protocol !== 'socks5:' && protocol !== 'http:') {
+    return { ok: false, reason: 'Use a socks5:// or http:// proxy address.' }
+  }
+  if (username || password) {
+    return {
+      ok: false,
+      reason: 'A proxy that needs a login is not supported. Remove the user name and password.'
+    }
+  }
+  if (!hostname) return { ok: false, reason: 'The proxy address names no host.' }
+  if (!port) return { ok: false, reason: 'Add the proxy port, as in socks5://127.0.0.1:9050.' }
+  if ((pathname && pathname !== '/') || search || hash) {
+    return { ok: false, reason: 'A proxy address is only scheme://host:port.' }
+  }
+  return { ok: true, url: `${protocol}//${hostname}:${port}` }
+}
+
+const ProxyUrlSchema = z.string().transform((value, ctx) => {
+  const result = parseProxyUrl(value)
+  if (!result.ok) {
+    ctx.addIssue({ code: 'custom', message: result.reason })
+    return z.NEVER
+  }
+  return result.url
+})
+
+// Strict on load as well as on edit. A stored Egress that no longer parses is not
+// coerced to a working one: the settings file fails its parse and the loader logs
+// it, as for any other invalid key.
+export const EgressSettingSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('direct') }),
+  z.object({ kind: z.literal('proxy'), proxyUrl: ProxyUrlSchema, label: z.string().trim() }),
+  z.object({
+    kind: z.literal('tor'),
+    // Tor listens for SOCKS5 only.
+    proxyUrl: ProxyUrlSchema.refine((url) => url.startsWith('socks5://'), {
+      message: 'Tor takes a socks5:// address.'
+    }),
+    label: z.string().trim()
+  })
+])
+
 export const BirdbrainSettingsSchema = z.object({
   captureScreenshots: z.boolean(),
   dedupeWindowSeconds: z.number(),
@@ -1215,7 +1278,8 @@ export const BirdbrainSettingsSchema = z.object({
   // `is_demo` probe in the database is what holds when it does (#1301).
   demoCaseSeeded: z.boolean().optional().default(false),
   releaseChannel: z.enum(['stable', 'beta']).optional().default('stable'),
-  autoCheckForUpdates: z.boolean().optional().default(true)
+  autoCheckForUpdates: z.boolean().optional().default(true),
+  egress: EgressSettingSchema.optional().default({ kind: 'direct' })
 })
 
 // Used on load: user may have an older settings file missing newer keys, so
