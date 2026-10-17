@@ -163,6 +163,33 @@ for six headers. `fields/2` added 976 `text.address` records and one `header.to`
   25 and 53 when it was sampled around the runs, and the `captures_fts` rebuild, which this
   version does not change, took between 53 ms and 328 ms across the four runs.
 
+### Each table and index, after the review fixes
+
+The review of #1899 found that the time the `fields/2` extractor took on hostile page text grew
+with the square of its size, and the extractor now finds its identifiers in one pass. One more run of each version followed, at
+`1d758124` (`fields/1`) and at `53c4886e` (`fields/2` with those fixes), with the same command.
+This pair gives every table and index on its own, which the table above groups. The `fields/2`
+run recorded the same number of records of each kind as the two runs at `2833cfe1`.
+
+| Table or index, bytes per Capture          | `fields/1` | `fields/2` |
+| ------------------------------------------ | ---------- | ---------- |
+| `exhibit_search_fields`                    | 3,510      | 3,682      |
+| `exhibit_search_fields_fts_data`           | 2,204      | 2,310      |
+| `exhibit_search_fields_fts_docsize`        | 184        | 197        |
+| `exhibit_search_fields_fts_idx`            | 12         | 12         |
+| `exhibit_search_fields_fts_config`         | 4          | 4          |
+| `idx_exhibit_search_fields_lookup`         | 1,925      | 2,044      |
+| `idx_exhibit_search_fields_exhibit_id`     | 950        | 975        |
+| `exhibit_search_builds`                    | 262        | 262        |
+| `idx_exhibit_search_builds_case_id`        | 53         | 53         |
+| `sqlite_autoindex_exhibit_search_builds_1` | 53         | 49         |
+| All of them                                | 9,159      | 9,589      |
+
+The full field build took 4.40 s for `fields/1` and 6.03 s for `fields/2`, 1.37 times as long,
+and the one-Capture median 3.60 ms and 4.54 ms. The one-minute load average was 8.4 and 6.9 when
+sampled at the end of each run, lower than for the runs above, so these times do not compare with
+theirs.
+
 ## Smoke runs, 2026-10-10
 
 Two runs proved the harness, at 60 and 1,000 Captures. They are not the baseline. They replace

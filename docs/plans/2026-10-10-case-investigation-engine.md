@@ -1821,11 +1821,16 @@ implements it amends ADR-0042 in the same PR, so no code ships against an unamen
   record, and a Message-ID written like an address reads as one, as `extractData()` reads it;
   `image.src` gives no record for a `data:` or empty source; `text.url` uses the extractor's own
   pattern for `http` and `https` addresses, without the closing punctuation; `id.tracking` and
-  `id.crypto` read the whole decoded part, scripts included, and a found value with a letter, digit
-  or underscore beside it gives no record. The kinds `fields/1` recorded come first, so the row
-  ceiling drops the new kinds first. A header name now takes any printable character but a space or
-  colon (scope added to #1890 from the #1884 review). The Links tab marks a row only for a link
-  target or alt text hit.
+  `id.crypto` read the whole decoded part, scripts included; a value `extractIocs()` returns gives
+  no record where a letter, digit or underscore sits beside it, while a tracking code rule's match
+  is recorded wherever the rule matches, as `extractData()` reports it. An email address that
+  begins a longer address gives no record inside the longer one. The text gives `text.address`
+  and `text.url` records only when it fits the byte budget of one page part. `header.to` and
+  `header.cc` read a group's mailboxes without its name or closing semicolon. The kinds `fields/1`
+  recorded come first, except To, Cc, Path and References, which come in their header block's order
+  beside the `fields/1` headers; so the row ceiling drops the page and text kinds first. A header
+  name now takes any printable character but a space or colon (scope added to #1890 from the #1884
+  review). The Links tab marks a row only for a link target or alt text hit.
 - **Next.** The maintainer reads this plan and approves it on PR #1805; the gates still open are in
   "Gates this plan waits on". Each brief is then filed against the ready-for-agent bar in
   `docs/agents/triage-labels.md`.
