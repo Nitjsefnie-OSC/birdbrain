@@ -9,7 +9,8 @@ import {
   extractFields,
   FIELD_EXTRACTOR_VERSION,
   headerFieldsFromText,
-  type ExtractedField
+  type ExtractedField,
+  type FieldSources
 } from '@main/services/search/fieldExtractor'
 import { fieldLabel, HEADER_FIELDS } from '@shared/searchFields'
 
@@ -97,6 +98,22 @@ function expectSpansInText(text: string, fields: ExtractedField[]): void {
     expect(field).toMatchObject({ source: 'text', part: null })
     expect(text.slice(field.startOffset, field.endOffset)).toBe(field.value)
   }
+}
+
+// Both checks over one extraction: each html-part field against the stored MHTML's
+// parts or the legacy HTML file, and each text field against the text.
+function expectSpansInSources(sources: FieldSources, fields: ExtractedField[]): void {
+  const fromPage = fields.filter((f) => f.source === 'html-part')
+  if (sources.mhtml) expectSpansInParts(sources.mhtml, fromPage)
+  for (const field of sources.mhtml ? [] : fromPage) {
+    expect(field.part).toBe(0)
+    const html = sources.html?.toString('utf8') ?? ''
+    expect(html.slice(field.startOffset, field.endOffset)).toBe(field.value)
+  }
+  expectSpansInText(
+    sources.text ?? '',
+    fields.filter((f) => f.source === 'text')
+  )
 }
 
 // Milliseconds a call takes. The input sizes in the tests that use it took the extractor
@@ -344,6 +361,18 @@ describe('extractFields: links', () => {
     }
   })
 
+  it("stops at the row ceiling on an image link's alt text", () => {
+    const buffer = mhtml([
+      { location: CAPTURE_URL, html: page('<a href="/1"><img src="one.png" alt="One"></a>') }
+    ])
+    const sources = { captureUrl: CAPTURE_URL, mhtml: buffer, html: null, text: null }
+    const capped = extractFields(sources, { ...CAPTURE_LINK_BUDGETS, maxRows: 1 })
+    expect(pick(capped.fields)).toEqual([
+      { field: 'link.href', value: '/1', norm: 'https://brindle-forum.example.org/1' }
+    ])
+    expect(capped.truncated).toBe(true)
+  })
+
   it('stops at the row ceiling and says so', () => {
     const buffer = mhtml([
       {
@@ -405,14 +434,16 @@ describe('headerFieldsFromText', () => {
       '',
       'Pay at https://ledger.example.org/pay'
     ].join('\n')
-    const { fields } = extractFields({
+    const sources = {
       captureUrl: CAPTURE_URL,
       mhtml: null,
       html: Buffer.from(
         page(`<a href="/a"><img src="a.png" alt="Pay"></a><p>GTM-QX4R7T ${ETH}</p>`)
       ),
       text: header
-    })
+    }
+    const { fields } = extractFields(sources)
+    expectSpansInSources(sources, fields)
     const recorded = new Set(fields.map((f) => f.field))
     // Each header, the two link fields, and the five page and text kinds fields/2 adds.
     expect(recorded.size).toBe(HEADER_FIELDS.length + 7)
@@ -927,6 +958,7 @@ describe('extractFields: reading order under fields/2', () => {
 
   it('reads the fields/1 kinds, then the page identifiers, then the text identifiers', () => {
     const { fields, truncated } = extractFields(sources)
+    expectSpansInSources(sources, fields)
     expect(fields.map((f) => f.field)).toEqual([
       'header.from',
       'header.message-id',
@@ -945,9 +977,11 @@ describe('extractFields: reading order under fields/2', () => {
 
   it('keeps every fields/1 record at the row ceiling and drops the later kinds first', () => {
     const atFive = extractFields(sources, { ...CAPTURE_LINK_BUDGETS, maxRows: 5 })
+    expectSpansInSources(sources, atFive.fields)
     expect(atFive.fields).toEqual(fields1(extractFields(sources).fields))
     expect(atFive.truncated).toBe(true)
     const atSeven = extractFields(sources, { ...CAPTURE_LINK_BUDGETS, maxRows: 7 })
+    expectSpansInSources(sources, atSeven.fields)
     expect(atSeven.fields.slice(5).map((f) => f.field)).toEqual(['image.src', 'id.tracking'])
     expect(atSeven.truncated).toBe(true)
   })
@@ -1012,10 +1046,22 @@ describe('extractFields: engine fixtures 1, 2 and 12', () => {
   })
 
   it('fixture 12: two links on a hash-routed site that differ only in the fragment', () => {
-    const { fields } = fromPage(
-      '<a href="https://ledger.example.org/#/accounts/1">a</a>' +
-        '<a href="https://ledger.example.org/#/accounts/2">b</a>'
-    )
+    const buffer = mhtml([
+      {
+        location: CAPTURE_URL,
+        html: page(
+          '<a href="https://ledger.example.org/#/accounts/1">a</a>' +
+            '<a href="https://ledger.example.org/#/accounts/2">b</a>'
+        )
+      }
+    ])
+    const { fields } = extractFields({
+      captureUrl: CAPTURE_URL,
+      mhtml: buffer,
+      html: null,
+      text: null
+    })
+    expectSpansInParts(buffer, fields)
     expect(only(fields, 'link.href').map((f) => f.norm)).toEqual([
       'https://ledger.example.org/#/accounts/1',
       'https://ledger.example.org/#/accounts/2'
@@ -1039,6 +1085,7 @@ describe('extractData beside extractFields', () => {
         text: null
       })
       expect(fields.length).toBeGreaterThan(0)
+      expectSpansInParts(buffer, fields)
       for (const { patterns } of EXTRACTION_RULES) {
         for (const pattern of patterns) expect(pattern.lastIndex).toBe(0)
       }
