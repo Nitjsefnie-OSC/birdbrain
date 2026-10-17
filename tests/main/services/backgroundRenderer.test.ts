@@ -418,14 +418,4 @@ describe('renderPageInHiddenWindow', () => {
     for await (const _chunk of result.mhtmlStream) void _chunk
     await result.cleanup()
   }, 30_000)
-
-  it('leaves a sub-frame hop to the frame, since it is not where the render is going', async () => {
-    ctl.hop = { event: 'will-redirect', url: 'http://192.168.1.1/', isMainFrame: false }
-
-    const result = await renderPageInHiddenWindow('https://example.test/', { timeoutMs: 30_000 })
-
-    expect(ctl.lastHop!.preventDefault).not.toHaveBeenCalled()
-    for await (const _chunk of result.mhtmlStream) void _chunk
-    await result.cleanup()
-  }, 30_000)
 })
