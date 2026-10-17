@@ -2,6 +2,13 @@ import * as cheerio from 'cheerio'
 import type { CaptureLinks } from '@shared/types'
 import { HEADER_FIELDS } from '@shared/searchFields'
 import {
+  EXTRACTION_RULES,
+  type ExtractedDatum,
+  type ExtractionRule
+} from '@main/services/dataExtractor'
+import { extractIocs } from '@main/services/extraction/iocAdapter'
+import { isValidEmail } from '@main/services/extraction/validators'
+import {
   CAPTURE_LINK_BUDGETS,
   documentBase,
   readHtmlParts,
@@ -11,10 +18,13 @@ import {
   type HtmlPartsRead
 } from '@main/services/htmlParts'
 
-// The Case search fields Extracted Text leaves out (docs/plans/2026-10-09-case-
-// retrieval-first-slice.md, D3 and D4): link targets and image link alt text from the
-// stored page, and identity-bearing mail headers from the Extracted Text file. Pure:
-// the caller reads the files, and nothing here touches the database.
+// The Case search fields Extracted Text leaves out. `fields/1` (docs/plans/2026-10-09-
+// case-retrieval-first-slice.md, D3 and D4) records link targets and image link alt text
+// from the stored page, and identity-bearing mail headers from the Extracted Text file.
+// `fields/2` (docs/plans/2026-10-10-case-investigation-engine.md, E11) adds four headers,
+// image addresses, tracking codes and cryptocurrency addresses from the stored page, and
+// email and web addresses from the Extracted Text. Pure: the caller reads the files, and
+// nothing here touches the database.
 //
 // Every field keeps the span it came from, so a hit can be opened and checked against
 // the stored bytes. `value` is that span exactly as stored; `norm` is the search form.
@@ -23,13 +33,17 @@ import {
 // anchor uses.
 
 /** Stored on each build row. A change to what is extracted, or how, takes a new version. */
-export const FIELD_EXTRACTOR_VERSION = 'fields/1'
+export const FIELD_EXTRACTOR_VERSION = 'fields/2'
 
 // A run of header lines is a header block only when one of these names is in it, so
 // a few `Label: value` lines in ordinary page text are not read as mail headers.
 const BLOCK_MARKERS = new Set(['from', 'reply-to', 'sender', 'message-id', 'path', 'received'])
-const ADDRESS_HEADERS = new Set(['from', 'reply-to', 'sender', 'return-path'])
+const ADDRESS_HEADERS = new Set(['from', 'reply-to', 'sender', 'return-path', 'to', 'cc'])
 const RECORDED_HEADERS = new Set(HEADER_FIELDS.map((name) => name.toLowerCase()))
+
+// The rules extractData() runs for tracking codes, imported so both find the same codes;
+// dataExtractor.ts itself is left as it is (E11).
+const TRACKING_RULES = EXTRACTION_RULES.filter((rule) => rule.category === 'Tracking Code')
 
 export interface ExtractedField {
   field: string
@@ -76,13 +90,23 @@ export function extractFields(
     fields.push(field)
     return true
   }
-  for (const field of sources.text === null ? [] : headerFields(sources.text)) {
-    if (!add(field)) break
+  const addAll = (found: Iterable<ExtractedField>): void => {
+    for (const field of found) if (!add(field)) return
   }
+  // The kinds `fields/1` records come first, so a Capture that reaches the row ceiling
+  // keeps every record the first version gave it and loses the later kinds.
+  if (sources.text !== null) addAll(headerFields(sources.text))
+  const images: ExtractedField[][] = []
   for (const part of parts) {
     if (truncated) break
-    addLinkFields(part, add)
+    images.push(addLinkFields(part, add))
   }
+  for (const [index, part] of parts.entries()) {
+    if (truncated) break
+    addAll(images[index] ?? [])
+    if (!truncated) addAll(partIdentifiers(part))
+  }
+  if (!truncated && sources.text !== null) addAll(textIdentifiers(sources.text))
   return { fields, skippedParts, mainDocumentSkipped, truncated }
 }
 
@@ -136,16 +160,18 @@ function attributeValueSpan(html: string, element: unknown, name: string): Span 
 }
 
 // One field per occurrence, since each has its own span. Anchor text is not
-// recorded: Extracted Text already holds it.
+// recorded: Extracted Text already holds it. Returns the part's image addresses, read
+// from the same parse and recorded after every part's links; none once the ceiling
+// stopped the links.
 function addLinkFields(
   { html, documentUrl, part }: HtmlPartInput,
   add: (field: ExtractedField) => boolean
-): void {
+): ExtractedField[] {
   const $ = cheerio.load(html, { sourceCodeLocationInfo: true })
   const base = documentBase($, documentUrl)
-  const record = (field: string, element: unknown, attr: string, norm: string): boolean => {
+  const at = (field: string, element: unknown, attr: string, norm: string): ExtractedField => {
     const span = attributeValueSpan(html, element, attr)
-    return add({
+    return {
       field,
       value: html.slice(span.start, span.end),
       norm,
@@ -153,18 +179,189 @@ function addLinkFields(
       part,
       startOffset: span.start,
       endOffset: span.end
-    })
+    }
   }
+  let stopped = false
   $('a[href], area[href]').each((_, element) => {
     const node = $(element)
     const href = (node.attr('href') ?? '').trim()
-    if (!record('link.href', element, 'href', resolveUrl(href, base) ?? href)) return false
+    if (!add(at('link.href', element, 'href', resolveUrl(href, base) ?? href))) {
+      stopped = true
+      return false
+    }
     const images = node.is('area') ? [element] : node.find('img[alt]').toArray()
     for (const image of images) {
       const alt = ($(image).attr('alt') ?? '').replace(/\s+/g, ' ').trim()
-      if (alt && !record('link.alt', image, 'alt', alt)) return false
+      if (alt && !add(at('link.alt', image, 'alt', alt))) {
+        stopped = true
+        return false
+      }
     }
   })
+  if (stopped) return []
+  // A `data:` source carries the image itself, with no host or target to record.
+  return $('img[src]')
+    .toArray()
+    .flatMap((image) => {
+      const src = ($(image).attr('src') ?? '').trim()
+      if (!src || /^data:/i.test(src)) return []
+      return [at('image.src', image, 'src', resolveUrl(src, base) ?? src)]
+    })
+}
+
+// A character that would carry a found value on: a value with one beside it is part of
+// a longer token, not that value.
+const WORD = /[A-Za-z0-9_]/
+const LOCAL_PART = /[A-Za-z0-9_.%+-]/
+
+// Every place `value` is written in `text`, standing alone. extractIocs() returns values
+// without places, so each is found again here; one it rewrote while refanging is not
+// in the text as returned and has no place.
+function occurrences(text: string, value: string, before: RegExp = WORD): Span[] {
+  const spans: Span[] = []
+  if (!value) return spans
+  for (let at = text.indexOf(value); at !== -1; at = text.indexOf(value, at + value.length)) {
+    const end = at + value.length
+    if (before.test(text[at - 1] ?? '') || WORD.test(text[end] ?? '')) continue
+    spans.push({ start: at, end })
+  }
+  return spans
+}
+
+function distinctSpans(spans: Span[]): Span[] {
+  const seen = new Set<string>()
+  return [...spans]
+    .sort((a, b) => a.start - b.start || a.end - b.end)
+    .filter(({ start, end }) => {
+      const key = `${start}:${end}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+}
+
+// Where a rule's normalized value sits in its match. A value cut from a quoted string,
+// as the Facebook Pixel rule's digits are, is taken from inside its quotes.
+function valueOffset(match: string, value: string): number {
+  for (const quote of ['"', "'"]) {
+    const at = match.indexOf(`${quote}${value}${quote}`)
+    if (at !== -1) return at + 1
+  }
+  return match.indexOf(value)
+}
+
+// The patterns are shared with extractData() and global, so each one's `lastIndex` is
+// reset before use, as runRules() in dataExtractor.ts does. A run to the end leaves it
+// at 0 again.
+function ruleSpans(text: string, rules: ExtractionRule[]): Span[] {
+  const spans: Span[] = []
+  for (const { patterns, normalize } of rules) {
+    for (const pattern of patterns) {
+      pattern.lastIndex = 0
+      for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
+        const [raw] = match
+        const value = (normalize ? normalize(raw) : raw)?.trim()
+        const offset = value ? valueOffset(raw, value) : -1
+        if (value && offset !== -1) {
+          spans.push({ start: match.index + offset, end: match.index + offset + value.length })
+        }
+      }
+    }
+  }
+  return spans
+}
+
+function iocSpans(text: string, iocs: ExtractedDatum[], category: string): Span[] {
+  return iocs
+    .filter((datum) => datum.category === category)
+    .flatMap(({ value }) => occurrences(text, value))
+}
+
+// Tracking codes and cryptocurrency addresses anywhere in the decoded part, scripts
+// included.
+function partIdentifiers({ html, part }: HtmlPartInput): ExtractedField[] {
+  const iocs = extractIocs(html)
+  const record =
+    (field: string) =>
+    ({ start, end }: Span): ExtractedField => {
+      const value = html.slice(start, end)
+      return {
+        field,
+        value,
+        norm: value,
+        source: 'html-part',
+        part,
+        startOffset: start,
+        endOffset: end
+      }
+    }
+  const tracking = [...ruleSpans(html, TRACKING_RULES), ...iocSpans(html, iocs, 'Tracking Code')]
+  return [
+    ...distinctSpans(tracking).map(record('id.tracking')),
+    ...distinctSpans(iocSpans(html, iocs, 'Cryptocurrency')).map(record('id.crypto'))
+  ]
+}
+
+// A web address in page text runs to the next space, quote or angle bracket. The
+// punctuation that ends a sentence is left off, and a closing bracket the address
+// did not open.
+const WEB_ADDRESS = /\bhttps?:\/\/[^\s<>"'`]+/gi
+const SENTENCE_END = new Set(['.', ',', ';', ':', '!', '?'])
+const CLOSES = new Map([
+  [')', '('],
+  [']', '['],
+  ['}', '{']
+])
+
+function webAddressLength(found: string): number {
+  let end = found.length
+  const count = (char: string): number => found.slice(0, end).split(char).length - 1
+  while (end > 0) {
+    const last = found[end - 1]
+    const opener = CLOSES.get(last)
+    if (SENTENCE_END.has(last) || (opener && count(opener) < count(last))) end -= 1
+    else break
+  }
+  return end
+}
+
+function webAddressSpans(text: string): Span[] {
+  const spans: Span[] = []
+  for (const match of text.matchAll(WEB_ADDRESS)) {
+    const length = webAddressLength(match[0])
+    // Something past the scheme, or there is no address.
+    if (length > match[0].indexOf('//') + 2) {
+      spans.push({ start: match.index, end: match.index + length })
+    }
+  }
+  return spans
+}
+
+function textIdentifiers(text: string): ExtractedField[] {
+  const record =
+    (field: string, norm: (value: string) => string) =>
+    ({ start, end }: Span): ExtractedField => {
+      const value = text.slice(start, end)
+      return {
+        field,
+        value,
+        norm: norm(value),
+        source: 'text',
+        part: null,
+        startOffset: start,
+        endOffset: end
+      }
+    }
+  // The addresses extractData() keeps: those extractIocs() finds that isValidEmail() accepts.
+  const addresses = extractIocs(text)
+    .filter(({ subcategory, value }) => subcategory === 'Email Address' && isValidEmail(value))
+    .flatMap(({ value }) => occurrences(text, value, LOCAL_PART))
+  return [
+    ...distinctSpans(addresses).map(record('text.address', (value) => value.toLowerCase())),
+    // An absolute address resolved against itself is the parser's form of it: scheme and
+    // host in lower case, a default port dropped, the fragment kept.
+    ...webAddressSpans(text).map(record('text.url', (value) => resolveUrl(value, value) ?? value))
+  ]
 }
 
 interface Line {
@@ -182,7 +379,9 @@ function* linesOf(text: string): Generator<Line> {
   yield { text: text.slice(start), start }
 }
 
-const HEADER_LINE = /^([A-Za-z][A-Za-z0-9-]*):(?=[ \t]|$)/
+// A header name is any printable ASCII character but a space or a colon, so a name such
+// as `X-Spam_score` does not end its block.
+const HEADER_LINE = /^([!-9;-~]+):(?=[ \t]|$)/
 const CONTINUATION_LINE = /^[ \t]+\S/
 
 interface HeaderField {
@@ -273,6 +472,35 @@ function addressNorm(mailbox: string): string {
     .toLowerCase()
 }
 
+// Each message identifier in a References value, so each compares with a Message-ID
+// on its own.
+function identifierSpans(value: string): Span[] {
+  return [...value.matchAll(/<[^<>]*>/g)]
+    .filter(([identifier]) => identifier.length > 2)
+    .map((match) => ({ start: match.index, end: match.index + match[0].length }))
+}
+
+// A Usenet Path lists the sites an article passed through, then a tail entry that names
+// none, by convention `not-for-mail` (RFC 5536, section 3.1.5). Each site is a record.
+// An empty entry, as `!!` leaves, gives none, and a diagnostic entry such as
+// `.POSTED.host` gives the site after its keyword, if it names one.
+function pathSpans(value: string): Span[] {
+  const entries: Span[] = []
+  let from = 0
+  for (let at = value.indexOf('!'); at !== -1; at = value.indexOf('!', from)) {
+    entries.push({ start: from, end: at })
+    from = at + 1
+  }
+  const spans: Span[] = []
+  for (const entry of entries) {
+    const { start, end } = trimmed(value, entry.start, entry.end)
+    const diagnostic = /^\.[A-Za-z]+\.?/.exec(value.slice(start, end))
+    const site = start + (diagnostic ? diagnostic[0].length : 0)
+    if (end > site) spans.push({ start: site, end })
+  }
+  return spans
+}
+
 export function headerFieldsFromText(text: string): ExtractedField[] {
   return [...headerFields(text)]
 }
@@ -297,6 +525,13 @@ function* headerFields(text: string): Generator<ExtractedField> {
         for (const span of mailboxSpans(value)) {
           const norm = addressNorm(value.slice(span.start, span.end))
           if (norm) yield fieldAt(field.name, start + span.start, start + span.end, norm)
+        }
+      } else if (field.name === 'references' || field.name === 'path') {
+        const spans = field.name === 'path' ? pathSpans(value) : identifierSpans(value)
+        for (const span of spans) {
+          const item = value.slice(span.start, span.end)
+          const norm = field.name === 'path' ? item.toLowerCase() : item.replace(/\s+/g, ' ')
+          yield fieldAt(field.name, start + span.start, start + span.end, norm)
         }
       } else {
         yield fieldAt(field.name, start, end, value.replace(/\s+/g, ' '))
