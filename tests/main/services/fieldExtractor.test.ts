@@ -620,6 +620,30 @@ describe('extractFields: the headers fields/2 adds', () => {
     expectSpansInText(text, fields)
   })
 
+  it('reads the mailboxes in a To or Cc group without its name or closing semicolon', () => {
+    const text = [
+      'From: Wren Hollis <wren@hollis-mail.example.org>',
+      'To: undisclosed-recipients:;',
+      'Cc: Desk team: a@harrow.example.net, "Hale, I" <B@Harrow.example.net>;, c@harrow.example.net'
+    ].join('\n')
+    const fields = headerFieldsFromText(text)
+    expect(pick(only(fields, 'header.to', 'header.cc'))).toEqual([
+      { field: 'header.cc', value: 'a@harrow.example.net', norm: 'a@harrow.example.net' },
+      {
+        field: 'header.cc',
+        value: '"Hale, I" <B@Harrow.example.net>',
+        norm: 'b@harrow.example.net'
+      },
+      { field: 'header.cc', value: 'c@harrow.example.net', norm: 'c@harrow.example.net' }
+    ])
+    expectSpansInText(text, fields)
+    // Reply-To is a fields/1 header, so a group there gives the record fields/1 gave.
+    const replyTo = headerFieldsFromText(`${text}\nReply-To: Desk: d@harrow.example.net;`)
+    expect(only(replyTo, 'header.reply-to').map((f) => f.norm)).toEqual([
+      'desk:d@harrow.example.net;'
+    ])
+  })
+
   it('reads each site in a Path, and nothing from the tail, an empty entry or a bare diagnostic', () => {
     const text = [
       'Path: News.Harrow.example.net!.POSTED.posting.example.org!!feed.example.org!',

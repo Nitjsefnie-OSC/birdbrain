@@ -485,13 +485,19 @@ function trimmed(text: string, start: number, end: number): Span {
 }
 
 // Splits an address list at the commas outside quotes, angle brackets and comments,
-// and returns each mailbox's span, trimmed.
-function mailboxSpans(value: string): Span[] {
+// and returns each mailbox's span, trimmed. With `groups`, a group (RFC 5322, section
+// 3.4), written `Name: a@host, b@host;`, gives its mailboxes without the group's name or
+// its closing semicolon, and an empty group gives none. Only To and Cc read groups, so
+// the headers `fields/1` records keep the records it gave.
+function mailboxSpans(value: string, groups = false): Span[] {
   const spans: Span[] = []
   let quoted = false
   let angle = 0
   let comment = 0
   let from = 0
+  let inGroup = false
+  // A colon after an `@` in the same mailbox is part of an address, not a group's name.
+  let sawAt = false
   const push = (to: number): void => {
     const span = trimmed(value, from, to)
     if (span.end > span.start) spans.push(span)
@@ -506,9 +512,19 @@ function mailboxSpans(value: string): Span[] {
     else if (comment > 0) continue
     else if (char === '<') angle += 1
     else if (char === '>' && angle > 0) angle -= 1
+    else if (char === '@') sawAt = true
     else if (char === ',' && angle === 0) {
       push(i)
       from = i + 1
+      sawAt = false
+    } else if (groups && angle === 0 && char === ':' && !inGroup && !sawAt) {
+      from = i + 1
+      inGroup = true
+    } else if (groups && angle === 0 && char === ';' && inGroup) {
+      push(i)
+      from = i + 1
+      inGroup = false
+      sawAt = false
     }
   }
   push(value.length)
@@ -580,7 +596,8 @@ function* headerFields(text: string): Generator<ExtractedField> {
       if (end <= start) continue
       const value = text.slice(start, end)
       if (ADDRESS_HEADERS.has(field.name)) {
-        for (const span of mailboxSpans(value)) {
+        const groups = field.name === 'to' || field.name === 'cc'
+        for (const span of mailboxSpans(value, groups)) {
           const norm = addressNorm(value.slice(span.start, span.end))
           if (norm) yield fieldAt(field.name, start + span.start, start + span.end, norm)
         }
