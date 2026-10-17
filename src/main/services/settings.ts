@@ -53,7 +53,8 @@ const DEFAULT_SETTINGS: BirdbrainSettings = {
   isFreshInstall: false,
   demoCaseSeeded: false,
   releaseChannel: 'stable',
-  autoCheckForUpdates: true
+  autoCheckForUpdates: true,
+  egress: { kind: 'direct' }
 }
 
 // A semver prerelease is signalled by a hyphen before any build-metadata `+`
@@ -228,6 +229,29 @@ function notifyIfThemeChanged(before: BirdbrainSettings, after: BirdbrainSetting
   for (const listener of themeListeners) listener(after.theme)
 }
 
+type EgressListener = (egress: BirdbrainSettings['egress']) => void
+const egressListeners = new Set<EgressListener>()
+
+// Fires after a write or held change moves the Egress (ADR-0032). The sessions that
+// carry the Wayback replay and update checks re-apply their proxy from this; a
+// background render reads the setting when it starts.
+export function onEgressChange(listener: EgressListener): () => void {
+  egressListeners.add(listener)
+  return () => {
+    egressListeners.delete(listener)
+  }
+}
+
+function notifyIfEgressChanged(before: BirdbrainSettings, after: BirdbrainSettings): void {
+  if (JSON.stringify(before.egress) === JSON.stringify(after.egress)) return
+  for (const listener of egressListeners) listener(after.egress)
+}
+
+function notifyChanges(before: BirdbrainSettings, after: BirdbrainSettings): void {
+  notifyIfThemeChanged(before, after)
+  notifyIfEgressChanged(before, after)
+}
+
 export function updateSettings(partial: Partial<BirdbrainSettings>): BirdbrainSettings {
   const before = getSettings()
   const parsed = SettingsUpdateSchema.safeParse(partial)
@@ -251,14 +275,14 @@ export function updateSettings(partial: Partial<BirdbrainSettings>): BirdbrainSe
       unsavedChoices = { ...unsavedChoices, ...supplied }
       logger.warn('settings', 'settings.unreadable_write_refused', undefined, err)
       const held = getSettings()
-      notifyIfThemeChanged(before, held)
+      notifyChanges(before, held)
       return held
     }
   }
   const updated = { ...before, ...supplied }
   writeFileSync(settingsPath, JSON.stringify(updated, null, 2), 'utf-8')
   unsavedChoices = {}
-  notifyIfThemeChanged(before, updated)
+  notifyChanges(before, updated)
   return updated
 }
 
@@ -267,7 +291,7 @@ export function resetSettings(): BirdbrainSettings {
   const defaults = { ...DEFAULT_SETTINGS }
   writeFileSync(settingsPath, JSON.stringify(defaults, null, 2), 'utf-8')
   unsavedChoices = {}
-  notifyIfThemeChanged(before, defaults)
+  notifyChanges(before, defaults)
   return defaults
 }
 

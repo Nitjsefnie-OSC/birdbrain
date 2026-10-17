@@ -16,6 +16,7 @@ import {
   resetSettings,
   getDefaultSettings,
   onThemeChange,
+  onEgressChange,
   InvalidSettingsError
 } from '@main/services/settings'
 import { DEFAULT_TSA_URL } from '@shared/constants'
@@ -50,6 +51,71 @@ describe('settings', () => {
       expect(listener).toHaveBeenLastCalledWith('dark')
       off()
       updateSettings({ theme: 'light' })
+      expect(listener).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  describe('the Egress setting (ADR-0032)', () => {
+    const tor = { kind: 'tor', proxyUrl: 'socks5://127.0.0.1:9150', label: 'Tor Browser' } as const
+
+    it('defaults to Direct, also for a settings file written before it existed', () => {
+      expect(getSettings().egress).toEqual({ kind: 'direct' })
+      writeFileSync(settingsFile, JSON.stringify({ operatorName: 'Matt' }))
+      expect(getSettings().egress).toEqual({ kind: 'direct' })
+    })
+
+    it('stores a proxy in its normalised form and reads it back', () => {
+      updateSettings({
+        egress: { kind: 'proxy', proxyUrl: ' socks5://10.0.0.2:1080/ ', label: ' Lab ' }
+      })
+      expect(getSettings().egress).toEqual({
+        kind: 'proxy',
+        proxyUrl: 'socks5://10.0.0.2:1080',
+        label: 'Lab'
+      })
+      expect(JSON.parse(readFileSync(settingsFile, 'utf-8')).egress.proxyUrl).toBe(
+        'socks5://10.0.0.2:1080'
+      )
+    })
+
+    it.each([
+      ['socks4://127.0.0.1:1080', /SOCKS4/],
+      ['socks://127.0.0.1:1080', /SOCKS4/],
+      ['socks5://user:secret@127.0.0.1:1080', /login/],
+      ['http://user@proxy.example:3128', /login/],
+      ['https://proxy.example:443', /socks5:\/\/ or http:\/\//],
+      ['socks5://127.0.0.1', /port/],
+      ['not a url', /Not a proxy address/]
+    ])('refuses %s with a message and keeps the stored Egress', (proxyUrl, message) => {
+      updateSettings({ egress: tor })
+      expect(() => updateSettings({ egress: { kind: 'proxy', proxyUrl, label: '' } })).toThrow(
+        message
+      )
+      expect(() => updateSettings({ egress: { kind: 'proxy', proxyUrl, label: '' } })).toThrow(
+        InvalidSettingsError
+      )
+      expect(getSettings().egress).toEqual(tor)
+    })
+
+    it('takes only a socks5 address for Tor', () => {
+      expect(() =>
+        updateSettings({ egress: { kind: 'tor', proxyUrl: 'http://127.0.0.1:8118', label: '' } })
+      ).toThrow(/Tor takes a socks5/)
+    })
+
+    it('tells listeners when an update or reset moves the Egress, and only then', () => {
+      const listener = vi.fn()
+      const off = onEgressChange(listener)
+      updateSettings({ operatorName: 'Matt' })
+      expect(listener).not.toHaveBeenCalled()
+      updateSettings({ egress: tor })
+      expect(listener).toHaveBeenCalledWith(tor)
+      updateSettings({ egress: tor })
+      expect(listener).toHaveBeenCalledTimes(1)
+      resetSettings()
+      expect(listener).toHaveBeenLastCalledWith({ kind: 'direct' })
+      off()
+      updateSettings({ egress: tor })
       expect(listener).toHaveBeenCalledTimes(2)
     })
   })

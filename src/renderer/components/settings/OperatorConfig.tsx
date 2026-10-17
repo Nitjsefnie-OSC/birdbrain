@@ -7,8 +7,9 @@ import {
 } from '@renderer/lib/queries'
 import { Card, CardContent, Input, Label } from '@renderer/components/ui'
 import { cn } from '@renderer/lib/utils'
-import { DEFAULT_TSA_URL } from '@shared/constants'
-import { parseTsaUrl } from '@shared/schemas'
+import { DEFAULT_TSA_URL, TOR_PROXY_PRESETS } from '@shared/constants'
+import { parseProxyUrl, parseTsaUrl } from '@shared/schemas'
+import type { EgressKind, EgressSetting } from '@shared/types'
 
 export function OperatorConfig() {
   const { data: identity } = useQuery(identityQueryOptions)
@@ -216,6 +217,7 @@ export function OperatorConfig() {
                 : 'Not in use while trusted timestamping is off. Nothing is sent to this endpoint.'}
             </p>
           </div>
+          <EgressSettings stored={settings?.egress ?? { kind: 'direct' }} />
           <div>
             <Label
               htmlFor="operator-installation"
@@ -237,5 +239,173 @@ export function OperatorConfig() {
         </div>
       </CardContent>
     </Card>
+  )
+}
+
+const EGRESS_CHOICES: Array<[EgressSetting['kind'], string, string]> = [
+  [
+    'direct',
+    'Direct',
+    "This device's own connection. A VPN on this device or its network still carries it."
+  ],
+  [
+    'proxy',
+    'Proxy',
+    "A SOCKS5 or HTTP proxy that needs no login, such as an SSH tunnel or a VPN client's local SOCKS port."
+  ],
+  [
+    'tor',
+    'Tor',
+    'Your own Tor Browser or Tor service. Tor hides this device’s IP address only: a background capture still names Birdbrain to the site.'
+  ]
+]
+
+// The Egress (ADR-0032). Direct saves at once; a Proxy or Tor saves once its
+// address parses, on blur or on a preset, so a half-typed address is never the
+// route. Main refuses the same addresses this does.
+function EgressSettings({ stored }: { stored: EgressSetting }) {
+  const { update } = useSettingsMutations()
+  const [kind, setKind] = useState<EgressSetting['kind']>(stored.kind)
+  const [proxyUrl, setProxyUrl] = useState(stored.kind === 'direct' ? '' : stored.proxyUrl)
+  const [label, setLabel] = useState(stored.kind === 'direct' ? '' : stored.label)
+  const [error, setError] = useState('')
+  const seeded = useRef(false)
+
+  useEffect(() => {
+    if (seeded.current || stored.kind === 'direct') return
+    seeded.current = true
+    setKind(stored.kind)
+    setProxyUrl(stored.proxyUrl)
+    setLabel(stored.label)
+  }, [stored])
+
+  async function save(next: EgressSetting) {
+    try {
+      await update.mutateAsync({ egress: next })
+      setError('')
+    } catch {
+      setError('The Egress could not be saved. The saved Egress has not changed.')
+    }
+  }
+
+  async function saveRoute(nextKind: EgressKind, url: string, nextLabel: string) {
+    const parsed = parseProxyUrl(url)
+    if (!parsed.ok) {
+      setError(`${parsed.reason} The saved Egress has not changed.`)
+      return
+    }
+    if (nextKind === 'tor' && !parsed.url.startsWith('socks5://')) {
+      setError('Tor takes a socks5:// address. The saved Egress has not changed.')
+      return
+    }
+    setProxyUrl(parsed.url)
+    await save({ kind: nextKind, proxyUrl: parsed.url, label: nextLabel.trim() })
+  }
+
+  async function choose(next: EgressSetting['kind']) {
+    setKind(next)
+    setError('')
+    if (next === 'direct') {
+      await save({ kind: 'direct' })
+      return
+    }
+    if (next === 'tor' && !proxyUrl.startsWith('socks5://')) {
+      await saveRoute('tor', TOR_PROXY_PRESETS[0].proxyUrl, label)
+      return
+    }
+    if (proxyUrl) await saveRoute(next, proxyUrl, label)
+  }
+
+  return (
+    <div>
+      <div className="text-xs font-medium text-text-secondary">Egress</div>
+      <p className="mt-1 text-[11px] text-text-muted">
+        Where Birdbrain&rsquo;s own traffic leaves from: background captures, the Wayback pane,
+        timestamp requests, filter lists and update checks. While it is not Direct, nothing
+        Birdbrain sends leaves directly, and a request fails when the proxy is down. The TLS
+        certificate re-fetch after each capture does not run. Shared Case sync still connects
+        directly, so teammates and the relay see this device&rsquo;s IP address.
+      </p>
+      <div className="mt-2 space-y-1" role="radiogroup" aria-label="Egress">
+        {EGRESS_CHOICES.map(([value, name, desc]) => (
+          <label
+            key={value}
+            className="flex cursor-pointer items-start gap-2 rounded p-1.5 hover:bg-elevated"
+          >
+            <input
+              type="radio"
+              name="egressKind"
+              value={value}
+              checked={kind === value}
+              onChange={() => void choose(value)}
+              className="mt-0.5"
+            />
+            <div>
+              <div className="text-sm text-text-secondary">{name}</div>
+              <div className="text-xs text-text-muted">{desc}</div>
+            </div>
+          </label>
+        ))}
+      </div>
+      {kind !== 'direct' && (
+        <div className="mt-2 flex flex-col gap-2">
+          <div>
+            <Label htmlFor="egress-proxy" className="text-xs font-medium text-text-secondary">
+              Proxy address
+            </Label>
+            <Input
+              id="egress-proxy"
+              type="text"
+              value={proxyUrl}
+              onChange={(e) => setProxyUrl(e.target.value)}
+              onBlur={() => void saveRoute(kind, proxyUrl, label)}
+              placeholder={
+                kind === 'tor' ? TOR_PROXY_PRESETS[0].proxyUrl : 'socks5://127.0.0.1:1080'
+              }
+              aria-invalid={error ? true : undefined}
+              aria-describedby={error ? 'egress-error' : undefined}
+              className={cn('bg-surface font-mono text-[11px]', error && 'border-red-500')}
+            />
+            {kind === 'tor' && (
+              <div className="mt-1 flex gap-2">
+                {TOR_PROXY_PRESETS.map((preset) => (
+                  <button
+                    key={preset.proxyUrl}
+                    type="button"
+                    onClick={() => void saveRoute('tor', preset.proxyUrl, label)}
+                    className="rounded border border-border px-2 py-0.5 text-[11px] text-text-secondary hover:bg-elevated"
+                  >
+                    {preset.name} ({preset.proxyUrl.split(':').pop()})
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div>
+            <Label htmlFor="egress-label" className="text-xs font-medium text-text-secondary">
+              Label
+            </Label>
+            <Input
+              id="egress-label"
+              type="text"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              onBlur={() => void saveRoute(kind, proxyUrl, label)}
+              placeholder="e.g. Frankfurt VPN"
+              className="bg-surface"
+            />
+            <p className="mt-1 text-[11px] text-text-muted">
+              Optional. Each capture Birdbrain renders through this Egress records the label and the
+              kind, never the proxy address.
+            </p>
+          </div>
+        </div>
+      )}
+      {error && (
+        <p id="egress-error" role="alert" className="mt-1 text-[11px] text-danger-fg">
+          {error}
+        </p>
+      )}
+    </div>
   )
 }
