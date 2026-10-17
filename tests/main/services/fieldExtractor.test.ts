@@ -99,6 +99,14 @@ function expectSpansInText(text: string, fields: ExtractedField[]): void {
   }
 }
 
+// Milliseconds a call takes. The input sizes in the tests that use it took the extractor
+// seconds before it read them in one pass, and take it well under the bound after.
+function elapsed(run: () => void): number {
+  const start = performance.now()
+  run()
+  return performance.now() - start
+}
+
 describe('extractFields: links', () => {
   it('records each href as stored and resolved, one field per occurrence', () => {
     const { fields } = fromPage(
@@ -689,6 +697,41 @@ describe('extractFields: the page identifiers fields/2 adds', () => {
     ])
   })
 
+  it('records a code with a hyphen beside it, and none a letter, digit or underscore continues', () => {
+    vi.spyOn(iocAdapter, 'extractIocs').mockReturnValue([
+      { category: 'Tracking Code', subcategory: 'Google Analytics', value: 'UA-31415926-2' }
+    ])
+    try {
+      const html =
+        '<p>UA-31415926-2-x a-UA-31415926-2 UA-31415926-23 xUA-31415926-2 _UA-31415926-2 ' +
+        'UA-31415926-2.</p>'
+      const { fields } = fromParts(html)
+      const at = page(html).indexOf(html)
+      expect(only(fields, 'id.tracking').map((f) => f.startOffset - at)).toEqual([
+        html.indexOf('UA-31415926-2-x'),
+        html.indexOf('a-UA') + 2,
+        html.lastIndexOf('UA-31415926-2.')
+      ])
+    } finally {
+      vi.restoreAllMocks()
+    }
+  })
+
+  it('finds every tracking code in one pass, however many the part holds', () => {
+    const codes = Array.from({ length: 40_000 }, (_, i) => `UA-${100_000 + i}-1`)
+    const sources = {
+      captureUrl: CAPTURE_URL,
+      mhtml: null,
+      html: Buffer.from(page(`<p>${codes.join(' ')}</p>`)),
+      text: null
+    }
+    let extraction = extractFields(sources, { ...CAPTURE_LINK_BUDGETS, maxRows: 1 })
+    expect(elapsed(() => (extraction = extractFields(sources)))).toBeLessThan(3000)
+    expect(extraction.fields).toHaveLength(CAPTURE_LINK_BUDGETS.maxRows)
+    expect(extraction.fields[0].value).toBe(codes[0])
+    expect(extraction.truncated).toBe(true)
+  })
+
   it('gives one record when two patterns find the same span', () => {
     vi.spyOn(iocAdapter, 'extractIocs').mockReturnValue([
       { category: 'Tracking Code', subcategory: 'Google Analytics', value: 'G-QM7R2K4W9X' }
@@ -762,6 +805,56 @@ describe('extractFields: the page text identifiers fields/2 adds', () => {
     ])
     // The header line keeps its own record beside the address one.
     expect(only(fields, 'header.from').map((f) => f.norm)).toEqual(['wren@hollis-mail.example.org'])
+  })
+
+  it('records no address at the start of a longer address', () => {
+    const text = 'Write to bob@harrow.example.net or to bob@harrow.example.net.au today.'
+    const { fields } = fromText(text)
+    expect(
+      only(fields, 'text.address').map(({ value, startOffset }) => [value, startOffset])
+    ).toEqual([
+      ['bob@harrow.example.net', 9],
+      ['bob@harrow.example.net.au', 38]
+    ])
+  })
+
+  it('finds every address in one pass, however many the text holds', () => {
+    const text = Array.from({ length: 40_000 }, (_, i) => `user${i}@host${i}.example.net`).join(' ')
+    let extraction = extractFields({ captureUrl: CAPTURE_URL, mhtml: null, html: null, text })
+    expect(
+      elapsed(
+        () =>
+          (extraction = extractFields({ captureUrl: CAPTURE_URL, mhtml: null, html: null, text }))
+      )
+    ).toBeLessThan(3000)
+    expect(extraction.fields).toHaveLength(CAPTURE_LINK_BUDGETS.maxRows)
+    expect(extraction.fields[0].value).toBe('user0@host0.example.net')
+  })
+
+  it('leaves off a long run of closing brackets after a web address in one pass', () => {
+    const text = `see http://a.example.net${')'.repeat(40_000)}`
+    let extraction = fromText(text)
+    expect(elapsed(() => (extraction = fromText(text)))).toBeLessThan(3000)
+    expect(only(extraction.fields, 'text.url').map((f) => f.value)).toEqual([
+      'http://a.example.net'
+    ])
+  })
+
+  it('gives a text over the part budget its header records only', () => {
+    const text = [
+      'From: Wren Hollis <wren@hollis-mail.example.org>',
+      'Message-ID: <a1@hollis-mail.example.org>',
+      '',
+      'See https://ledger.example.org/a'
+    ].join('\n')
+    const budgets = { ...CAPTURE_LINK_BUDGETS, maxPartBytes: Buffer.byteLength(text) - 1 }
+    const sources = { captureUrl: CAPTURE_URL, mhtml: null, html: null, text }
+    expect(extractFields(sources, budgets).fields.map((f) => f.field)).toEqual([
+      'header.from',
+      'header.message-id'
+    ])
+    const atBudget = { ...budgets, maxPartBytes: Buffer.byteLength(text) }
+    expect(only(extractFields(sources, atBudget).fields, 'text.url')).toHaveLength(1)
   })
 
   it('records no address written with [at], which extractIocs() returns rewritten', () => {

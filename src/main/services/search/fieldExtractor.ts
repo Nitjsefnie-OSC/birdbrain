@@ -93,10 +93,10 @@ export function extractFields(
   const addAll = (found: Iterable<ExtractedField>): void => {
     for (const field of found) if (!add(field)) return
   }
-  // The kinds `fields/1` records come first, so a Capture that reaches the row ceiling
-  // keeps every record the first version gave it and loses the later kinds.
+  // The kinds `fields/1` records come first, except To, Cc, Path and References, which
+  // come in their header block's order beside the `fields/1` headers.
   if (sources.text !== null) addAll(headerFields(sources.text))
-  const images: ExtractedField[][] = []
+  const images: Iterable<ExtractedField>[] = []
   for (const part of parts) {
     if (truncated) break
     images.push(addLinkFields(part, add))
@@ -106,7 +106,11 @@ export function extractFields(
     addAll(images[index] ?? [])
     if (!truncated) addAll(partIdentifiers(part))
   }
-  if (!truncated && sources.text !== null) addAll(textIdentifiers(sources.text))
+  // The text gets the budget one page part has. Over it, the text gives header records only.
+  const { text } = sources
+  if (!truncated && text !== null && Buffer.byteLength(text, 'utf8') <= budgets.maxPartBytes) {
+    addAll(textIdentifiers(text))
+  }
   return { fields, skippedParts, mainDocumentSkipped, truncated }
 }
 
@@ -161,12 +165,12 @@ function attributeValueSpan(html: string, element: unknown, name: string): Span 
 
 // One field per occurrence, since each has its own span. Anchor text is not
 // recorded: Extracted Text already holds it. Returns the part's image addresses, read
-// from the same parse and recorded after every part's links; none once the ceiling
-// stopped the links.
+// lazily from the same parse and recorded after every part's links; none once the
+// ceiling stopped the links.
 function addLinkFields(
   { html, documentUrl, part }: HtmlPartInput,
   add: (field: ExtractedField) => boolean
-): ExtractedField[] {
+): Iterable<ExtractedField> {
   const $ = cheerio.load(html, { sourceCodeLocationInfo: true })
   const base = documentBase($, documentUrl)
   const at = (field: string, element: unknown, attr: string, norm: string): ExtractedField => {
@@ -199,31 +203,80 @@ function addLinkFields(
     }
   })
   if (stopped) return []
-  // A `data:` source carries the image itself, with no host or target to record.
-  return $('img[src]')
-    .toArray()
-    .flatMap((image) => {
+  const images = $('img[src]').toArray()
+  return (function* () {
+    for (const image of images) {
       const src = ($(image).attr('src') ?? '').trim()
-      if (!src || /^data:/i.test(src)) return []
-      return [at('image.src', image, 'src', resolveUrl(src, base) ?? src)]
-    })
+      // A `data:` source carries the image itself, with no host or target to record.
+      if (src && !/^data:/i.test(src)) {
+        yield at('image.src', image, 'src', resolveUrl(src, base) ?? src)
+      }
+    }
+  })()
 }
 
 // A character that would carry a found value on: a value with one beside it is part of
 // a longer token, not that value.
 const WORD = /[A-Za-z0-9_]/
-const LOCAL_PART = /[A-Za-z0-9_.%+-]/
 
-// Every place `value` is written in `text`, standing alone. extractIocs() returns values
-// without places, so each is found again here; one it rewrote while refanging is not
+// extractIocs() returns values without places, so each is found again here, in one pass
+// over the text however many values there are. A value it rewrote while refanging is not
 // in the text as returned and has no place.
-function occurrences(text: string, value: string, before: RegExp = WORD): Span[] {
+//
+// Tracking codes and cryptocurrency addresses are letters, digits and hyphens. One standing
+// alone, with no letter, digit or underscore beside it, starts where a run of word
+// characters and hyphens starts or after a hyphen in it, and ends where the run ends or
+// before a hyphen. So each candidate is a few whole hyphen-separated pieces of a run: at
+// most one more than the hyphens in the value that has the most.
+const IDENTIFIER_RUN = /[A-Za-z0-9_-]+/g
+
+function valueSpans(text: string, values: Set<string>): Span[] {
   const spans: Span[] = []
-  if (!value) return spans
-  for (let at = text.indexOf(value); at !== -1; at = text.indexOf(value, at + value.length)) {
-    const end = at + value.length
-    if (before.test(text[at - 1] ?? '') || WORD.test(text[end] ?? '')) continue
-    spans.push({ start: at, end })
+  if (values.size === 0) return spans
+  let hyphens = 0
+  let longest = 0
+  for (const value of values) {
+    hyphens = Math.max(hyphens, value.split('-').length - 1)
+    longest = Math.max(longest, value.length)
+  }
+  for (const { 0: run, index } of text.matchAll(IDENTIFIER_RUN)) {
+    const starts = [index]
+    const ends: number[] = []
+    for (let at = run.indexOf('-'); at !== -1; at = run.indexOf('-', at + 1)) {
+      ends.push(index + at)
+      starts.push(index + at + 1)
+    }
+    ends.push(index + run.length)
+    for (const [i, start] of starts.entries()) {
+      for (let j = i; j < Math.min(ends.length, i + hyphens + 1); j += 1) {
+        const end = ends[j]
+        if (end - start > longest) break
+        if (end > start && values.has(text.slice(start, end))) spans.push({ start, end })
+      }
+    }
+  }
+  return spans
+}
+
+// An email address standing alone is a whole run of local-part characters, an `@`, and a
+// whole domain: dot-separated labels, trailing hyphens left off, with no word character
+// after it. An address that begins a longer one, as `a@host.example.net` begins
+// `a@host.example.net.au`, is not standing alone there.
+const LOCAL_RUN = /[A-Za-z0-9_.%+-]+/g
+const DOMAIN = /[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*/y
+
+function emailSpans(text: string, values: Set<string>): Span[] {
+  const spans: Span[] = []
+  if (values.size === 0) return spans
+  for (const { 0: local, index } of text.matchAll(LOCAL_RUN)) {
+    const at = index + local.length
+    if (text[at] !== '@') continue
+    DOMAIN.lastIndex = at + 1
+    const domain = DOMAIN.exec(text)
+    if (!domain) continue
+    const end = at + 1 + domain[0].replace(/-+$/, '').length
+    if (WORD.test(text[end] ?? '')) continue
+    if (values.has(text.slice(index, end))) spans.push({ start: index, end })
   }
   return spans
 }
@@ -272,14 +325,13 @@ function ruleSpans(text: string, rules: ExtractionRule[]): Span[] {
 }
 
 function iocSpans(text: string, iocs: ExtractedDatum[], category: string): Span[] {
-  return iocs
-    .filter((datum) => datum.category === category)
-    .flatMap(({ value }) => occurrences(text, value))
+  const values = iocs.filter((datum) => datum.category === category).map(({ value }) => value)
+  return valueSpans(text, new Set(values))
 }
 
 // Tracking codes and cryptocurrency addresses anywhere in the decoded part, scripts
 // included.
-function partIdentifiers({ html, part }: HtmlPartInput): ExtractedField[] {
+function* partIdentifiers({ html, part }: HtmlPartInput): Generator<ExtractedField> {
   const iocs = extractIocs(html)
   const record =
     (field: string) =>
@@ -296,10 +348,8 @@ function partIdentifiers({ html, part }: HtmlPartInput): ExtractedField[] {
       }
     }
   const tracking = [...ruleSpans(html, TRACKING_RULES), ...iocSpans(html, iocs, 'Tracking Code')]
-  return [
-    ...distinctSpans(tracking).map(record('id.tracking')),
-    ...distinctSpans(iocSpans(html, iocs, 'Cryptocurrency')).map(record('id.crypto'))
-  ]
+  yield* distinctSpans(tracking).map(record('id.tracking'))
+  yield* distinctSpans(iocSpans(html, iocs, 'Cryptocurrency')).map(record('id.crypto'))
 }
 
 // A web address in page text runs to the next space, quote or angle bracket. The
@@ -312,15 +362,23 @@ const CLOSES = new Map([
   [']', '['],
   ['}', '{']
 ])
+const BRACKETS = new Set('()[]{}')
 
+// Counts each bracket once, then takes a closer off the count as it is left off, so a
+// long run of closers costs one pass.
 function webAddressLength(found: string): number {
+  const counts = new Map<string, number>()
+  for (const char of found) {
+    if (BRACKETS.has(char)) counts.set(char, (counts.get(char) ?? 0) + 1)
+  }
   let end = found.length
-  const count = (char: string): number => found.slice(0, end).split(char).length - 1
   while (end > 0) {
     const last = found[end - 1]
     const opener = CLOSES.get(last)
-    if (SENTENCE_END.has(last) || (opener && count(opener) < count(last))) end -= 1
-    else break
+    const closers = counts.get(last) ?? 0
+    if (opener && (counts.get(opener) ?? 0) < closers) counts.set(last, closers - 1)
+    else if (!SENTENCE_END.has(last)) break
+    end -= 1
   }
   return end
 }
@@ -337,7 +395,7 @@ function webAddressSpans(text: string): Span[] {
   return spans
 }
 
-function textIdentifiers(text: string): ExtractedField[] {
+function* textIdentifiers(text: string): Generator<ExtractedField> {
   const record =
     (field: string, norm: (value: string) => string) =>
     ({ start, end }: Span): ExtractedField => {
@@ -355,13 +413,13 @@ function textIdentifiers(text: string): ExtractedField[] {
   // The addresses extractData() keeps: those extractIocs() finds that isValidEmail() accepts.
   const addresses = extractIocs(text)
     .filter(({ subcategory, value }) => subcategory === 'Email Address' && isValidEmail(value))
-    .flatMap(({ value }) => occurrences(text, value, LOCAL_PART))
-  return [
-    ...distinctSpans(addresses).map(record('text.address', (value) => value.toLowerCase())),
-    // An absolute address resolved against itself is the parser's form of it: scheme and
-    // host in lower case, a default port dropped, the fragment kept.
-    ...webAddressSpans(text).map(record('text.url', (value) => resolveUrl(value, value) ?? value))
-  ]
+    .map(({ value }) => value)
+  yield* emailSpans(text, new Set(addresses)).map(
+    record('text.address', (value) => value.toLowerCase())
+  )
+  // An absolute address resolved against itself is the parser's form of it: scheme and
+  // host in lower case, a default port dropped, the fragment kept.
+  yield* webAddressSpans(text).map(record('text.url', (value) => resolveUrl(value, value) ?? value))
 }
 
 interface Line {
