@@ -528,6 +528,40 @@ describe('updater service — Egress (ADR-0032)', () => {
     expect(autoUpdater.downloadUpdate).not.toHaveBeenCalled()
   })
 
+  it('runs no check and reports an error while the saved Egress cannot be read', async () => {
+    const { deps, setProxy, emitted } = sessionDeps(() => ({ kind: 'unavailable' }))
+    const svc = createUpdaterService(deps)
+    svc.start()
+    expect(emitted.at(-1)).toMatchObject({ state: 'error' })
+    expect((await svc.check()).state).toBe('error')
+    expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled()
+    expect(setProxy).not.toHaveBeenCalled()
+  })
+
+  it('re-reads the setting before a check, so a file that reads again routes the check', async () => {
+    let egress: EgressSetting = { kind: 'unavailable' }
+    const { deps, setProxy } = sessionDeps(() => egress)
+    const svc = createUpdaterService(deps)
+    svc.start()
+    egress = tor
+    await svc.check()
+    expect(setProxy).toHaveBeenCalledWith(torConfig)
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1)
+  })
+
+  it('puts a changed proxy on the session before the check a channel change starts', async () => {
+    let egress: EgressSetting = { kind: 'direct' }
+    const { deps, setProxy } = sessionDeps(() => egress)
+    const svc = createUpdaterService(deps)
+    svc.start()
+    egress = tor
+    svc.applySettingsChange({ releaseChannel: 'beta', egress })
+    await new Promise((resolve) => setImmediate(resolve))
+    const check = autoUpdater.checkForUpdates as ReturnType<typeof vi.fn>
+    expect(check).toHaveBeenCalledTimes(1)
+    expect(setProxy.mock.invocationCallOrder[0]).toBeLessThan(check.mock.invocationCallOrder[0])
+  })
+
   it('waits for an apply in flight before the first check goes out', async () => {
     let finish: () => void = () => {}
     const { deps, setProxy } = sessionDeps(() => tor)

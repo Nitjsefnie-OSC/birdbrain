@@ -1199,11 +1199,21 @@ export function parseProxyUrl(value: string): ProxyUrlParse {
     }
   }
   if (!hostname) return { ok: false, reason: 'The proxy address names no host.' }
-  if (!port) return { ok: false, reason: 'Add the proxy port, as in socks5://127.0.0.1:9050.' }
+  // A host name or an IP address and nothing else. Chromium's proxy rules read `=`
+  // and `;` as rule syntax, so `socks5://http=x;y:9050` would read there as "no
+  // proxy for http" while the setting said Tor.
+  if (!/^[a-z0-9.-]+$/i.test(hostname) && !/^\[[0-9a-f:.]+\]$/i.test(hostname)) {
+    return { ok: false, reason: 'The proxy host must be a host name or an IP address.' }
+  }
+  // `URL` drops a scheme's default port, so `http://proxy:80` arrives with none.
+  const effectivePort = port || (protocol === 'http:' ? '80' : '')
+  if (!effectivePort) {
+    return { ok: false, reason: 'Add the proxy port, as in socks5://127.0.0.1:9050.' }
+  }
   if ((pathname && pathname !== '/') || search || hash) {
     return { ok: false, reason: 'A proxy address is only scheme://host:port.' }
   }
-  return { ok: true, url: `${protocol}//${hostname}:${port}` }
+  return { ok: true, url: `${protocol}//${hostname}:${effectivePort}` }
 }
 
 const ProxyUrlSchema = z.string().transform((value, ctx) => {
@@ -1215,9 +1225,8 @@ const ProxyUrlSchema = z.string().transform((value, ctx) => {
   return result.url
 })
 
-// Strict on load as well as on edit. A stored Egress that no longer parses is not
-// coerced to a working one: the settings file fails its parse and the loader logs
-// it, as for any other invalid key.
+// The Egress an edit may store. A stored Egress that no longer parses is never
+// coerced to a working one: the loader reads it as unavailable (settings.ts).
 export const EgressSettingSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('direct') }),
   z.object({ kind: z.literal('proxy'), proxyUrl: ProxyUrlSchema, label: z.string().trim() }),
@@ -1229,6 +1238,13 @@ export const EgressSettingSchema = z.discriminatedUnion('kind', [
     }),
     label: z.string().trim()
   })
+])
+
+// On load, also the unavailable marker, which a save over an unparseable file can
+// write back. It stays until the Operator chooses an Egress.
+export const StoredEgressSchema = z.union([
+  EgressSettingSchema,
+  z.object({ kind: z.literal('unavailable') })
 ])
 
 export const BirdbrainSettingsSchema = z.object({
@@ -1279,7 +1295,7 @@ export const BirdbrainSettingsSchema = z.object({
   demoCaseSeeded: z.boolean().optional().default(false),
   releaseChannel: z.enum(['stable', 'beta']).optional().default('stable'),
   autoCheckForUpdates: z.boolean().optional().default(true),
-  egress: EgressSettingSchema.optional().default({ kind: 'direct' })
+  egress: StoredEgressSchema.optional().default({ kind: 'direct' })
 })
 
 // Used on load: user may have an older settings file missing newer keys, so
@@ -1288,7 +1304,9 @@ export const BirdbrainSettingsSchema = z.object({
 // are stripped rather than rejected, so an older file still parses.
 export const PartialBirdbrainSettingsSchema = BirdbrainSettingsSchema.partial()
 
-// Used on edit: the load schema with `tsaUrl` strict. See TsaUrlEditSchema.
+// Used on edit: the load schema with `tsaUrl` strict (see TsaUrlEditSchema), and an
+// Egress the Operator chose, never the unavailable marker.
 export const SettingsUpdateSchema = PartialBirdbrainSettingsSchema.extend({
-  tsaUrl: TsaUrlEditSchema.optional().default(DEFAULT_TSA_URL)
+  tsaUrl: TsaUrlEditSchema.optional().default(DEFAULT_TSA_URL),
+  egress: EgressSettingSchema.optional()
 })

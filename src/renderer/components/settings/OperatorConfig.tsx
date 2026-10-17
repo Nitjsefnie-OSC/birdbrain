@@ -9,7 +9,7 @@ import { Card, CardContent, Input, Label } from '@renderer/components/ui'
 import { cn } from '@renderer/lib/utils'
 import { DEFAULT_TSA_URL, TOR_PROXY_PRESETS } from '@shared/constants'
 import { parseProxyUrl, parseTsaUrl } from '@shared/schemas'
-import type { EgressKind, EgressSetting } from '@shared/types'
+import type { EgressKind, EgressSetting, KnownEgress } from '@shared/types'
 
 export function OperatorConfig() {
   const { data: identity } = useQuery(identityQueryOptions)
@@ -242,7 +242,7 @@ export function OperatorConfig() {
   )
 }
 
-const EGRESS_CHOICES: Array<[EgressSetting['kind'], string, string]> = [
+const EGRESS_CHOICES: Array<[KnownEgress['kind'], string, string]> = [
   [
     'direct',
     'Direct',
@@ -262,27 +262,37 @@ const EGRESS_CHOICES: Array<[EgressSetting['kind'], string, string]> = [
 
 // The Egress (ADR-0032). Direct saves at once; a Proxy or Tor saves once its
 // address parses, on blur or on a preset, so a half-typed address is never the
-// route. Main refuses the same addresses this does.
+// route. Main refuses the same addresses this does. An Egress the settings file no
+// longer shows checks no choice until the Operator makes one.
 function EgressSettings({ stored }: { stored: EgressSetting }) {
   const { update } = useSettingsMutations()
-  const [kind, setKind] = useState<EgressSetting['kind']>(stored.kind)
-  const [proxyUrl, setProxyUrl] = useState(stored.kind === 'direct' ? '' : stored.proxyUrl)
-  const [label, setLabel] = useState(stored.kind === 'direct' ? '' : stored.label)
+  const routed = stored.kind === 'proxy' || stored.kind === 'tor' ? stored : null
+  const [kind, setKind] = useState<KnownEgress['kind'] | null>(
+    stored.kind === 'unavailable' ? null : stored.kind
+  )
+  const [proxyUrl, setProxyUrl] = useState(routed?.proxyUrl ?? '')
+  const [label, setLabel] = useState(routed?.label ?? '')
   const [error, setError] = useState('')
+  const [note, setNote] = useState('')
   const seeded = useRef(false)
 
   useEffect(() => {
     if (seeded.current || stored.kind === 'direct') return
     seeded.current = true
+    if (stored.kind === 'unavailable') {
+      setKind(null)
+      return
+    }
     setKind(stored.kind)
     setProxyUrl(stored.proxyUrl)
     setLabel(stored.label)
   }, [stored])
 
-  async function save(next: EgressSetting) {
+  async function save(next: KnownEgress) {
     try {
       await update.mutateAsync({ egress: next })
       setError('')
+      setNote('')
     } catch {
       setError('The Egress could not be saved. The saved Egress has not changed.')
     }
@@ -302,9 +312,10 @@ function EgressSettings({ stored }: { stored: EgressSetting }) {
     await save({ kind: nextKind, proxyUrl: parsed.url, label: nextLabel.trim() })
   }
 
-  async function choose(next: EgressSetting['kind']) {
+  async function choose(next: KnownEgress['kind']) {
     setKind(next)
     setError('')
+    setNote('')
     if (next === 'direct') {
       await save({ kind: 'direct' })
       return
@@ -313,7 +324,11 @@ function EgressSettings({ stored }: { stored: EgressSetting }) {
       await saveRoute('tor', TOR_PROXY_PRESETS[0].proxyUrl, label)
       return
     }
-    if (proxyUrl) await saveRoute(next, proxyUrl, label)
+    if (proxyUrl) {
+      await saveRoute(next, proxyUrl, label)
+      return
+    }
+    setNote('Enter the proxy address. The saved Egress stays in effect until then.')
   }
 
   return (
@@ -321,11 +336,16 @@ function EgressSettings({ stored }: { stored: EgressSetting }) {
       <div className="text-xs font-medium text-text-secondary">Egress</div>
       <p className="mt-1 text-[11px] text-text-muted">
         Where Birdbrain&rsquo;s own traffic leaves from: background captures, the Wayback pane,
-        timestamp requests, filter lists and update checks. While it is not Direct, nothing
-        Birdbrain sends leaves directly, and a request fails when the proxy is down. The TLS
-        certificate re-fetch after each capture does not run. Shared Case sync still connects
-        directly, so teammates and the relay see this device&rsquo;s IP address.
+        timestamp requests, filter lists and update checks. While it is not Direct, each of these
+        goes through the proxy and fails when the proxy is down, with no fallback to this
+        device&rsquo;s connection, and the TLS certificate re-fetch after each capture does not run.
       </p>
+      {stored.kind === 'unavailable' && (
+        <p role="alert" className="mt-1 text-[11px] text-danger-fg">
+          The saved Egress could not be read, so Birdbrain sends nothing on these routes until you
+          choose one.
+        </p>
+      )}
       <div className="mt-2 space-y-1" role="radiogroup" aria-label="Egress">
         {EGRESS_CHOICES.map(([value, name, desc]) => (
           <label
@@ -347,7 +367,7 @@ function EgressSettings({ stored }: { stored: EgressSetting }) {
           </label>
         ))}
       </div>
-      {kind !== 'direct' && (
+      {(kind === 'proxy' || kind === 'tor') && (
         <div className="mt-2 flex flex-col gap-2">
           <div>
             <Label htmlFor="egress-proxy" className="text-xs font-medium text-text-secondary">
@@ -406,6 +426,7 @@ function EgressSettings({ stored }: { stored: EgressSetting }) {
           {error}
         </p>
       )}
+      {note && !error && <p className="mt-1 text-[11px] text-text-muted">{note}</p>}
     </div>
   )
 }

@@ -474,6 +474,23 @@ describe('Egress setting', () => {
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
+  it('says when the saved Egress could not be read, and checks no choice', async () => {
+    mountEgress({ kind: 'unavailable' })
+    expect((await screen.findByRole('alert')).textContent).toContain('could not be read')
+    const group = screen.getByRole('radiogroup', { name: 'Egress' })
+    for (const radio of within(group).getAllByRole('radio')) {
+      expect(radio).toHaveProperty('checked', false)
+    }
+  })
+
+  it('says the saved Egress stays when Proxy is chosen with no address', async () => {
+    const update = mountEgress()
+    const group = await screen.findByRole('radiogroup', { name: 'Egress' })
+    fireEvent.click(within(group).getByRole('radio', { name: /Proxy/ }))
+    expect(await screen.findByText(/The saved Egress stays in effect/)).toBeDefined()
+    expect(update).not.toHaveBeenCalled()
+  })
+
   it('shows a stored proxy with its address and label', async () => {
     mountEgress({ kind: 'proxy', proxyUrl: 'http://10.0.0.2:3128', label: 'Office' })
     await waitFor(() =>
