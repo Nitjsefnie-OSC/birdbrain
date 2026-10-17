@@ -366,12 +366,12 @@ export async function trimTrailingBackground(png: Buffer): Promise<Buffer> {
 
 // A load that failed at the proxy names the proxy, so the Operator can tell a
 // stopped Tor from an unreachable site. Chromium reports those failures as
-// ERR_PROXY_*, ERR_SOCKS_* or ERR_TUNNEL_*. The address appears only in the
-// failure message, never in a stored Capture.
+// ERR_PROXY_*, ERR_SOCKS_*, ERR_TUNNEL_* or ERR_NO_SUPPORTED_PROXIES. The address
+// appears only in the failure message, never in a stored Capture.
 function proxyFailure(err: unknown, egress: KnownEgress): Error | null {
   if (egress.kind === 'direct') return null
   const message = err instanceof Error ? err.message : String(err)
-  if (!/ERR_(PROXY|SOCKS|TUNNEL)_/.test(message)) return null
+  if (!/ERR_(PROXY_|SOCKS_|TUNNEL_|NO_SUPPORTED_PROXIES)/.test(message)) return null
   return new Error(`Could not go through the Egress proxy ${egress.proxyUrl}: ${message}`)
 }
 

@@ -224,4 +224,78 @@ describe('createRoutedSession', () => {
     expect(route.allowsRequests()).toBe(false)
     expect(setProxy).toHaveBeenCalledTimes(1)
   })
+
+  it('closes once the setting stops reading, with no change event, and reopens on the same route', async () => {
+    let egress: EgressSetting = tor
+    const { session, setProxy, pending } = fakeSession()
+    const route = createRoutedSession(session, vi.fn(), () => egress)
+    pending[0].resolve()
+    await flush()
+    expect(route.allowsRequests()).toBe(true)
+    egress = { kind: 'unavailable' }
+    expect(route.allowsRequests()).toBe(false)
+    egress = tor
+    expect(route.allowsRequests()).toBe(true)
+    expect(setProxy).toHaveBeenCalledTimes(1)
+  })
+
+  it('applies a proxy written to the file from outside the app before it opens again', async () => {
+    let egress: EgressSetting = { kind: 'direct' }
+    const { session, setProxy, pending } = fakeSession()
+    const route = createRoutedSession(session, vi.fn(), () => egress)
+    expect(route.allowsRequests()).toBe(true)
+    egress = tor
+    expect(route.allowsRequests()).toBe(false)
+    expect(setProxy).toHaveBeenCalledWith(proxyConfigFor(tor))
+    pending[0].resolve()
+    await flush()
+    expect(route.allowsRequests()).toBe(true)
+  })
+
+  it('stays closed when the setting stops reading while a change is applying', async () => {
+    let egress: EgressSetting = tor
+    const { session, pending } = fakeSession()
+    const route = createRoutedSession(session, vi.fn(), () => egress)
+    pending[0].resolve()
+    await flush()
+    egress = { kind: 'direct' }
+    route.sync(egress)
+    egress = { kind: 'unavailable' }
+    route.sync(egress)
+    pending[1].resolve()
+    await flush()
+    expect(route.allowsRequests()).toBe(false)
+  })
+
+  it('retries a once-refused proxy after another route was applied', async () => {
+    const other: EgressSetting = { kind: 'proxy', proxyUrl: 'http://10.0.0.2:3128', label: '' }
+    let egress: EgressSetting = tor
+    const { session, setProxy, pending } = fakeSession()
+    const route = createRoutedSession(session, vi.fn(), () => egress)
+    pending[0].reject(new Error('bad proxy rules'))
+    await flush()
+    egress = other
+    route.sync(egress)
+    pending[1].resolve()
+    await flush()
+    egress = tor
+    route.sync(egress)
+    pending[2].resolve()
+    await flush()
+    egress = { kind: 'unavailable' }
+    expect(route.allowsRequests()).toBe(false)
+    egress = tor
+    expect(route.allowsRequests()).toBe(true)
+    expect(setProxy).toHaveBeenCalledTimes(3)
+  })
+
+  it('reports each route the session takes', async () => {
+    const onApplied = vi.fn()
+    const { session, pending } = fakeSession()
+    createRoutedSession(session, vi.fn(), () => tor, onApplied)
+    expect(onApplied).not.toHaveBeenCalled()
+    pending[0].resolve()
+    await flush()
+    expect(onApplied).toHaveBeenCalledWith(tor)
+  })
 })

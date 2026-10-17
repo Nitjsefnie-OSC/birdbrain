@@ -1176,6 +1176,17 @@ export type ProxyUrlParse = { ok: true; url: string } | { ok: false; reason: str
 // Chromium. No user name or password, because Chromium cannot log in to a SOCKS5
 // proxy and Birdbrain stores no passwords. The address is returned as
 // `scheme://host:port`, the form Chromium's proxy rules take.
+// A host name of dot-separated labels, a dotted IPv4 address with each part in
+// range, or a bracketed IPv6 address. Chromium turns an out-of-range address into
+// an empty proxy list, which fails without naming the proxy.
+function isProxyHost(hostname: string): boolean {
+  if (/^\[[0-9a-f:.]+\]$/i.test(hostname)) return true
+  const labels = hostname.split('.')
+  if (!labels.every((part) => /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(part))) return false
+  if (!/^[0-9]+$/.test(labels[labels.length - 1])) return true
+  return labels.length === 4 && labels.every((part) => /^[0-9]+$/.test(part) && Number(part) <= 255)
+}
+
 export function parseProxyUrl(value: string): ProxyUrlParse {
   const trimmed = value.trim()
   if (!trimmed) return { ok: false, reason: 'Enter the proxy address, as socks5://host:port.' }
@@ -1202,7 +1213,7 @@ export function parseProxyUrl(value: string): ProxyUrlParse {
   // A host name or an IP address and nothing else. Chromium's proxy rules read `=`
   // and `;` as rule syntax, so `socks5://http=x;y:9050` would read there as "no
   // proxy for http" while the setting said Tor.
-  if (!/^[a-z0-9.-]+$/i.test(hostname) && !/^\[[0-9a-f:.]+\]$/i.test(hostname)) {
+  if (!isProxyHost(hostname)) {
     return { ok: false, reason: 'The proxy host must be a host name or an IP address.' }
   }
   // `URL` drops a scheme's default port, so `http://proxy:80` arrives with none.

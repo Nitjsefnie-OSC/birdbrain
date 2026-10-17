@@ -274,16 +274,21 @@ function EgressSettings({ stored }: { stored: EgressSetting }) {
   const [label, setLabel] = useState(routed?.label ?? '')
   const [error, setError] = useState('')
   const [note, setNote] = useState('')
-  const seeded = useRef(false)
+  // The choice follows the saved Egress whenever that changes, so a file that
+  // stops or starts reading again shows what is in effect. A Proxy chosen with no
+  // address yet changes nothing saved, so it stays checked.
+  const seen = useRef(JSON.stringify(stored))
 
   useEffect(() => {
-    if (seeded.current || stored.kind === 'direct') return
-    seeded.current = true
+    const key = JSON.stringify(stored)
+    if (seen.current === key) return
+    seen.current = key
     if (stored.kind === 'unavailable') {
       setKind(null)
       return
     }
     setKind(stored.kind)
+    if (stored.kind === 'direct') return
     setProxyUrl(stored.proxyUrl)
     setLabel(stored.label)
   }, [stored])
@@ -335,10 +340,11 @@ function EgressSettings({ stored }: { stored: EgressSetting }) {
     <div>
       <div className="text-xs font-medium text-text-secondary">Egress</div>
       <p className="mt-1 text-[11px] text-text-muted">
-        Where Birdbrain&rsquo;s own traffic leaves from: background captures, the Wayback pane,
-        timestamp requests, filter lists and update checks. While it is not Direct, each of these
-        goes through the proxy and fails when the proxy is down, with no fallback to this
-        device&rsquo;s connection, and the TLS certificate re-fetch after each capture does not run.
+        Where these routes leave from: background captures, the Wayback pane, timestamp requests,
+        filter lists and update checks. While it is not Direct, each of these goes through the proxy
+        and fails when the proxy is down, with no fallback to this device&rsquo;s connection, and
+        the TLS certificate re-fetch after each capture does not run. PDF export of an older HTML
+        capture is not routed and can fetch that page&rsquo;s images directly.
       </p>
       {stored.kind === 'unavailable' && (
         <p role="alert" className="mt-1 text-[11px] text-danger-fg">

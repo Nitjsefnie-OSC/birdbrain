@@ -483,6 +483,15 @@ describe('renderPageInHiddenWindow', () => {
     expect(ctl.lastWindow!.isDestroyed()).toBe(true)
   }, 30_000)
 
+  it('names the proxy when Chromium finds no usable proxy in the rules', async () => {
+    ctl.egress = { kind: 'proxy', proxyUrl: 'socks5://127.0.0.1:1080', label: '' }
+    ctl.loadUrlError = "ERR_NO_SUPPORTED_PROXIES (-336) loading 'https://example.test/'"
+
+    await expect(
+      renderPageInHiddenWindow('https://example.test/', { timeoutMs: 30_000 })
+    ).rejects.toThrow('Could not go through the Egress proxy socks5://127.0.0.1:1080')
+  }, 30_000)
+
   it('passes any other load failure through unchanged while a proxy is set', async () => {
     ctl.egress = { kind: 'proxy', proxyUrl: 'http://10.1.2.3:3128', label: '' }
     ctl.loadUrlError = "ERR_NAME_NOT_RESOLVED (-105) loading 'https://example.test/'"

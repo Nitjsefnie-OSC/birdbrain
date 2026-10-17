@@ -44,7 +44,12 @@ import {
 } from '@main/webviewPolicy'
 import { forwardGuestMouseDown } from '@main/guestMouseDown'
 import { initSettings, getSettings, onEgressChange, onThemeChange } from '@main/services/settings'
-import { createRoutedSession, webRtcPolicyFor, type RoutedSession } from '@main/services/egress'
+import {
+  createRoutedSession,
+  currentEgress,
+  webRtcPolicyFor,
+  type RoutedSession
+} from '@main/services/egress'
 import { titleBarOptions, titleBarOverlay, windowBackgroundColor } from '@main/windowChrome'
 import { initInstallationId, getInstallationId } from '@main/services/installationId'
 import { initSigningKey, SigningKeyUnacknowledgedError } from '@main/services/signingKey'
@@ -69,6 +74,7 @@ import { ident, tag } from '@main/services/logSafe'
 import { detectInstallFormat } from '@main/services/diagnostics'
 import { markCleanExit, startSession } from '@main/services/sessionLog'
 import { IPC_CHANNELS, type DeepLinkTarget, type SelectorRematchedEvent } from '@shared/ipc'
+import type { EgressSetting } from '@shared/types'
 import { sendEvent } from '@main/ipcWrap'
 
 let mainWindow: BrowserWindow | null = null
@@ -668,14 +674,7 @@ if (!gotSingleInstanceLock) {
       // every request until it carries the current Egress (createRoutedSession), set
       // up before the window exists, so no replay loads ahead of its proxy. Its
       // guests keep WebRTC's UDP inside the proxy, re-set on every change.
-      waybackRoute = createRoutedSession(
-        electronSession.fromPartition(WAYBACK_PARTITION),
-        (err) => {
-          logger.error('app', 'app.egress_apply_failed', undefined, err)
-        }
-      )
-      onEgressChange((egress) => {
-        waybackRoute?.sync(egress)
+      const setWaybackWebRtc = (egress: EgressSetting): void => {
         for (const contents of electronWebContents.getAllWebContents()) {
           if (
             contents.getType() === 'webview' &&
@@ -684,6 +683,18 @@ if (!gotSingleInstanceLock) {
             contents.setWebRTCIPHandlingPolicy(webRtcPolicyFor(egress))
           }
         }
+      }
+      waybackRoute = createRoutedSession(
+        electronSession.fromPartition(WAYBACK_PARTITION),
+        (err) => {
+          logger.error('app', 'app.egress_apply_failed', undefined, err)
+        },
+        currentEgress,
+        setWaybackWebRtc
+      )
+      onEgressChange((egress) => {
+        waybackRoute?.sync(egress)
+        setWaybackWebRtc(egress)
       })
 
       // Create window and connect to capture server

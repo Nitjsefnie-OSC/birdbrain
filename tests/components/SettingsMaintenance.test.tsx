@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { DatabaseAdmin } from '@renderer/components/settings/DatabaseAdmin'
@@ -489,6 +489,43 @@ describe('Egress setting', () => {
     fireEvent.click(within(group).getByRole('radio', { name: /Proxy/ }))
     expect(await screen.findByText(/The saved Egress stays in effect/)).toBeDefined()
     expect(update).not.toHaveBeenCalled()
+  })
+
+  it('follows the saved Egress when the file stops reading and reads again', async () => {
+    const tor = { kind: 'tor', proxyUrl: 'socks5://127.0.0.1:9150', label: '' }
+    fakeBridge({
+      settings: {
+        getIdentity: vi.fn().mockResolvedValue({
+          operatorName: 'A. Analyst',
+          operatorRole: '',
+          operatorOrganization: '',
+          installationId: 'install-1'
+        }),
+        get: vi.fn().mockResolvedValue({ tsaUrl: DEFAULT_TSA_URL, egress: tor }),
+        update: vi.fn()
+      }
+    })
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={client}>
+        <OperatorConfig />
+      </QueryClientProvider>
+    )
+    const group = await screen.findByRole('radiogroup', { name: 'Egress' })
+    const torRadio = within(group).getByRole('radio', { name: /Tor/ })
+    await waitFor(() => expect(torRadio).toHaveProperty('checked', true))
+
+    act(() => {
+      client.setQueryData(['settings'], {
+        tsaUrl: DEFAULT_TSA_URL,
+        egress: { kind: 'unavailable' }
+      })
+    })
+    await waitFor(() => expect(torRadio).toHaveProperty('checked', false))
+    act(() => {
+      client.setQueryData(['settings'], { tsaUrl: DEFAULT_TSA_URL, egress: tor })
+    })
+    await waitFor(() => expect(torRadio).toHaveProperty('checked', true))
   })
 
   it('shows a stored proxy with its address and label', async () => {

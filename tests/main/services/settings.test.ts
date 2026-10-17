@@ -158,8 +158,12 @@ describe('settings', () => {
 
     it.each([
       ['socks5://http=x;y:9050', /host name or an IP address/],
-      ['socks5://a;b:1080', /host name or an IP address/]
-    ])('refuses %s, which Chromium would read as proxy rules', (proxyUrl, message) => {
+      ['socks5://a;b:1080', /host name or an IP address/],
+      ['socks5://999.999.999.999:9050', /host name or an IP address/],
+      ['socks5://1.2.3.999:9050', /host name or an IP address/],
+      ['socks5://..:9050', /host name or an IP address/],
+      ['socks5://-:9050', /host name or an IP address/]
+    ])('refuses %s, which Chromium would not read as one proxy', (proxyUrl, message) => {
       expect(() => updateSettings({ egress: { kind: 'tor', proxyUrl, label: '' } })).toThrow(
         message
       )
