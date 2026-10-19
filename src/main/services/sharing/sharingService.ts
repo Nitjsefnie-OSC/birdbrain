@@ -35,6 +35,7 @@ import { MAX_HANDSHAKE_FRAME_BYTES, MessageReader } from '@main/services/sharing
 import {
   liveSyncSource,
   pullFromPeer,
+  rememberPeerTicket,
   serveSyncSession,
   type SyncSource
 } from '@main/services/sharing/session'
@@ -55,8 +56,9 @@ import {
 //
 // The transport starts on the first call that needs the network, not at
 // launch, through `setTransportProvider`. The default provider returns null,
-// so every such call refuses `sharing-unavailable` until `IrohTransport` is
-// wired in (#1809). SC-9 moves the start to launch and owns the timer.
+// so every such call refuses `sharing-unavailable`; the app's provider starts
+// `IrohTransport` (#1809) and returns null where the binding does not load.
+// SC-9 moves the start to launch and owns the timer.
 
 export type TransportProvider = () => Promise<Transport | null>
 
@@ -72,7 +74,7 @@ export interface SharingServiceDeps {
 
 export interface StreamHandlers {
   join: (stream: ByteStream, peerNodeId: string) => Promise<void>
-  hello: (stream: ByteStream) => Promise<void>
+  hello: (stream: ByteStream, peerNodeId: string) => Promise<void>
 }
 
 // A stream that replays the chunks the router read, then reads on: the
@@ -115,7 +117,7 @@ export async function routeIncomingStream(
     return
   }
   if (first?.t === 'join') return handlers.join(replayed(stream, recorded), peerNodeId)
-  if (first?.t === 'hello') return handlers.hello(replayed(stream, recorded))
+  if (first?.t === 'hello') return handlers.hello(replayed(stream, recorded), peerNodeId)
   stream.close()
 }
 
@@ -188,7 +190,13 @@ export class SharingService {
     await transport.listen((stream, peerNodeId) => {
       routeIncomingStream(stream, peerNodeId, {
         join: (s, peer) => joins.serve(s, peer),
-        hello: (s) => serveSyncSession(s, this.sourceFor)
+        hello: (s, peer) =>
+          serveSyncSession(s, this.sourceFor, {
+            ticket: transport.ticket,
+            peerNodeId: peer,
+            ticketNodeId: (ticket) => transport.nodeIdOf(ticket),
+            rememberTicket: rememberPeerTicket
+          })
       }).catch((err: unknown) => {
         logger.warn('sharing', 'sharing.stream_failed', undefined, err)
       })
@@ -259,7 +267,10 @@ export class SharingService {
       step('syncing')
       try {
         await pullFromPeer(caseId, await transport.openStream(connection), {
-          receivedCaptures: this.deps.receivedCaptures
+          receivedCaptures: this.deps.receivedCaptures,
+          ticket: transport.ticket,
+          peerNodeId: connection.peerNodeId,
+          ticketNodeId: (ticket) => transport.nodeIdOf(ticket)
         })
       } catch (err) {
         logger.warn('sharing', 'sharing.first_session_failed', undefined, err)
@@ -337,7 +348,10 @@ export class SharingService {
       }
       try {
         const result = await pullFromPeer(caseId, await transport.openStream(connection), {
-          receivedCaptures: this.deps.receivedCaptures
+          receivedCaptures: this.deps.receivedCaptures,
+          ticket: transport.ticket,
+          peerNodeId: connection.peerNodeId,
+          ticketNodeId: (ticket) => transport.nodeIdOf(ticket)
         })
         outcomes.push({
           installationId,
@@ -377,10 +391,13 @@ export class SharingService {
     }
   }
 
-  // Closes the transport, if one started. For quit.
+  // Closes the transport, if one started. For quit. A start that failed has
+  // already refused the command that asked for it, so here it leaves nothing
+  // to close.
   async close(): Promise<void> {
-    const started = this.started === null ? null : await this.started
+    const pending = this.started
     this.started = null
+    const started = pending === null ? null : await pending.catch(() => null)
     await started?.transport.close()
   }
 }
