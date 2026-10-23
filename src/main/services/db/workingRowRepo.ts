@@ -407,6 +407,50 @@ export function ownLiveRowsOnCapture(id: string): Array<{ table: SyncedTable; ke
   ]
 }
 
+// The Capture or Exhibit a member's copy must hold for a row to land there: the one the row
+// names, and for a tag application on a note, the Capture its note links. NULL for a tag.
+const NEEDS: Record<SyncedTable, string> = {
+  notes: 't.capture_id',
+  tags: 'NULL',
+  exhibit_tags: 't.exhibit_id',
+  note_tags: '(SELECT n.capture_id FROM notes n WHERE n.id = t.note_id)',
+  annotations: 't.capture_id',
+  annotation_pins: 't.capture_id'
+}
+
+export interface UnsignedLocalRow {
+  table: SyncedTable
+  key: RowKey
+  // The Capture or Exhibit id the row needs on a member's copy, or null.
+  needs: string | null
+}
+
+// The rows of a Case with no author and no signature (#1910): this installation's, written
+// before rows were signed, and the rows an archive import brought. An archive of any schema
+// carries its exporter's own rows with no author, so those read as this installation's too
+// (the first share reads the chain's `import` entries for that). By table in SYNCED_TABLES
+// order, then as written. A tag is the Case's when an application in the Case names it, any
+// author's, live or not: the rule the offer reads (`inCase`); the first share never signs one.
+// Tombstones are included; rows of other authors and signed rows are not.
+export function ownUnsignedRowsInCase(caseId: string): UnsignedLocalRow[] {
+  return SYNCED_TABLES.flatMap((table) => {
+    const { key, inCase } = SPECS[table]
+    const rows = getDb()
+      .prepare(
+        `SELECT ${key.map((column) => `t.${column}`).join(', ')}, ${NEEDS[table]} AS needs
+           FROM ${table} t
+          WHERE t.author_installation_id IS NULL AND t.row_signature IS NULL AND (${inCase})
+          ORDER BY t.rowid`
+      )
+      .all({ case_id: caseId }) as Array<Record<string, string | null>>
+    return rows.map((row) => ({
+      table,
+      key: Object.fromEntries(key.map((column) => [column, String(row[column])])),
+      needs: row.needs
+    }))
+  })
+}
+
 export function isSharedCaseId(caseId: string): boolean {
   return (
     getDb().prepare('SELECT 1 FROM cases WHERE id = ? AND shared_at IS NOT NULL').get(caseId) !==

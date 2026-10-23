@@ -12,6 +12,7 @@ import { getSettings } from '@main/services/settings'
 import { ensureCaseDir, getStorageRoot } from '@main/services/storage'
 import { resolveToolVersion } from '@main/services/toolVersion'
 import {
+  idsReachingMembers,
   readManifestSnapshot,
   readSharedCaseSnapshot,
   withManifestEntry,
@@ -24,7 +25,8 @@ import {
   rebuildRosterCache,
   writeRosterFiles
 } from '@main/services/sharing/rosterCache'
-import { storedEntries } from '@main/services/sharing/entryAcceptance'
+import { nonEmptyLines, storedEntries } from '@main/services/sharing/entryAcceptance'
+import { signOwnUnsignedRows } from '@main/services/sharing/workingRows'
 import { isChainInstallationId } from '../../../packages/evidence-package-layout/index'
 
 // The roster writers (#1810): the entries only the Owner writes, through the
@@ -70,6 +72,25 @@ function ownerMemberAdd(entries: ManifestEntry[]): MemberAddEntry | undefined {
   return currentSegment(entries).find(
     (e): e is MemberAddEntry => e.type === 'member-add' && e.role === 'owner'
   )
+}
+
+// The Owner's rows of the Case written before rows were signed (#1910), signed in the
+// transaction that marks the Case shared where they are provably the Owner's (the first share
+// signs no older tag). An `import` at any depth of the chain brought rows that read as this
+// installation's, whichever installation it names: the archive header that names the exporter
+// is unsigned, and the chain does not cover the rows. An `archive-export` signs nothing: another
+// copy may hold the rows under the same ids, and a signed copy would collide there and roll back
+// every session. So does a line that does not parse as an entry, which may be either of them.
+function signOlderRows(caseId: string, caseDir: string): void {
+  const { jsonl } = readManifestSnapshot(caseDir)
+  const entries = storedEntries(jsonl)
+  if (entries.length !== nonEmptyLines(jsonl.toString('utf-8')).length) return
+  if (entries.some((e) => e.type === 'archive-export')) return
+  const held = idsReachingMembers(entries)
+  signOwnUnsignedRows(caseId, {
+    membersHold: (id) => held.has(id),
+    imported: entries.some((e) => e.type === 'import')
+  })
 }
 
 function samePem(a: string, b: string): boolean {
@@ -145,6 +166,9 @@ export interface ShareCaseOptions {
 // `member-add` and sets `shared_at` and `owner_installation_id`. A Case
 // whose chain already holds the Owner's `member-add` gets nothing appended;
 // a row left unset by a crash between the append and the row write is set.
+// Whichever call sets `shared_at` also signs the Owner's older rows of the Case
+// that signOwnUnsignedRows selects, in the same transaction (#1910); a later
+// invite signs nothing.
 export async function shareCase(caseId: string, options: ShareCaseOptions): Promise<CaseMember> {
   const row = caseOrThrow(caseId)
   const self = getInstallationId()
@@ -159,7 +183,7 @@ export async function shareCase(caseId: string, options: ShareCaseOptions): Prom
   if (existing !== undefined) {
     if (existing.memberInstallationId !== self) throw new SharingError('not-owner')
     withTransaction(() => {
-      markCaseShared(caseId, self)
+      if (markCaseShared(caseId, self)) signOlderRows(caseId, caseDir)
       applyRosterEntries(caseId, ownEntries(caseDir))
     })
     writeRosterFiles({ caseId, caseDir, ownerEntries: ownEntries(caseDir), self })
@@ -182,7 +206,9 @@ export async function shareCase(caseId: string, options: ShareCaseOptions): Prom
       role: 'owner',
       ...stamp(self, operatorName)
     },
-    () => markCaseShared(caseId, self)
+    () => {
+      if (markCaseShared(caseId, self)) signOlderRows(caseId, caseDir)
+    }
   )
   return listCaseMembers(caseId).find((m) => m.installationId === self)!
 }

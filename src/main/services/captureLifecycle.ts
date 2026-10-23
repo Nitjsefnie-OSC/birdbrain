@@ -22,6 +22,7 @@ import {
 import { getInstallationId } from '@main/services/installationId'
 import {
   authorChainOf,
+  entryReachesMembers,
   getManifestHead,
   readCaptureEntryAt,
   readCaseChains,
@@ -1164,10 +1165,8 @@ export function createCaptureLifecycle(deps: CaptureLifecycleDeps): CaptureLifec
         const { own, describes } = readOnce()
         return own.chain.valid ? signedCaptureId(capture, own.entries, describes) : capture.id
       },
-      reachesMembers: ({ manifestIndex }) => {
-        const lastImport = Math.max(-1, ...readOnce().own.imports.map((entry) => entry.index))
-        return manifestIndex !== undefined && manifestIndex > lastImport
-      }
+      reachesMembers: ({ manifestIndex }) =>
+        manifestIndex !== undefined && entryReachesMembers(manifestIndex, readOnce().own.imports)
     }
   }
 
