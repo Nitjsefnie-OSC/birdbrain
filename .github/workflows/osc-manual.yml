@@ -33,7 +33,9 @@ jobs:
         with:
           repository: Nitjsefnie-OSC/birdbrain
           ref: ${{ inputs.target_ref }}
-          fetch-depth: 1
+          # Full history: preflight resolves its diff-coverage merge base with
+          # `git merge-base origin/main HEAD`, which cannot cross a shallow cut.
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Report checked-out SHA
@@ -64,11 +66,6 @@ jobs:
             libasound2t64 libxtst6 xauth libgbm1 libsecret-1-0
 
       - run: pnpm install
-
-      # preflight resolves its diff-coverage merge base against origin/main,
-      # which the depth-1 candidate checkout does not carry; fetch it.
-      - name: Fetch fork main for the preflight merge base
-        run: git fetch --no-tags origin main
 
       - name: Verify openssl is available
         run: openssl version
