@@ -1,0 +1,84 @@
+name: birdbrain fork CI
+
+# Fork-only exact-ref validation. This file is intentionally not sent upstream.
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Git branch, tag, or 40-character commit SHA to validate
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: birdbrain-osc-manual-${{ github.repository }}-${{ inputs.target_ref }}
+  cancel-in-progress: true
+
+env:
+  APT_OPTS: -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15
+  DROP_AZURE_MIRROR: >-
+    sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://archive.ubuntu.com/ubuntu|g'
+    /etc/apt/apt-mirrors.txt 2>/dev/null || true
+
+jobs:
+  gate:
+    name: Core CI gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout candidate ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Nitjsefnie-OSC/birdbrain
+          ref: ${{ inputs.target_ref }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Report checked-out SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          checked_out_sha="$(git rev-parse HEAD)"
+          if [[ ! "$checked_out_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::git rev-parse HEAD did not produce a 40-character commit SHA: $checked_out_sha"
+            exit 1
+          fi
+          printf 'checked-out SHA: %s\n' "$checked_out_sha"
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install native build dependencies
+        timeout-minutes: 5
+        run: |
+          ${{ env.DROP_AZURE_MIRROR }}
+          sudo apt-get $APT_OPTS update
+          sudo apt-get $APT_OPTS install -y build-essential python3 \
+            libgtk-3-0 libnotify-dev libnss3 libxss1 \
+            libasound2t64 libxtst6 xauth libgbm1 libsecret-1-0
+
+      - run: pnpm install
+
+      - name: Verify openssl is available
+        run: openssl version
+
+      - name: Full verify block (preflight)
+        run: pnpm preflight
+        env:
+          BIRDBRAIN_REQUIRE_OPENSSL: '1'
+
+      - name: Upload preflight verification block
+        uses: actions/upload-artifact@v4
+        with:
+          name: preflight-verification
+          path: .preflight/verification.md
+          if-no-files-found: error
+
+      - name: Run E2E tests
+        run: xvfb-run --auto-servernum npx playwright test
