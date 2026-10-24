@@ -1922,8 +1922,12 @@ describe('startCaptureServer bind failure', () => {
       await release()
     }
     await startOn(0)
-    // The lookup reads back the OS-assigned port the successful bind got.
-    expect(getCaptureServerPort()).toBeGreaterThan(0)
+    // The lookup reads back the OS-assigned port the successful bind got, and
+    // the status answer proves a server is serving on it.
+    const port = getCaptureServerPort()
+    expect(port).toBeGreaterThan(0)
+    const status = await readJson(await fetch(`http://127.0.0.1:${port}/api/status`))
+    expect(status.running).toBe(true)
   })
 
   // The durable app.startup_failed entry is all an operator sends in, and
