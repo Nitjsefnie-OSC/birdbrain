@@ -65,6 +65,11 @@ jobs:
 
       - run: pnpm install
 
+      # preflight resolves its diff-coverage merge base against origin/main,
+      # which the depth-1 candidate checkout does not carry; fetch it.
+      - name: Fetch fork main for the preflight merge base
+        run: git fetch --no-tags origin main
+
       - name: Verify openssl is available
         run: openssl version
 
