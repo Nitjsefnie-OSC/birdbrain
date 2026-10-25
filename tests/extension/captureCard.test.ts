@@ -136,6 +136,20 @@ describe('post-capture card', () => {
     )
   })
 
+  it('names a stored scrolling screenshot on a degraded card', () => {
+    updateToast({ status: 'degraded', card, scrolling: true, storedScreenshot: 'scrolling' })
+    expect(shadow().querySelector('.facts')!.textContent).toBe(
+      'Scrolling screenshot · MHTML · sha256 recorded · #42'
+    )
+  })
+
+  it('names a stored full-page screenshot on a degraded card', () => {
+    updateToast({ status: 'degraded', card, storedScreenshot: 'full-page' })
+    expect(shadow().querySelector('.facts')!.textContent).toBe(
+      'Full page screenshot · MHTML · sha256 recorded · #42'
+    )
+  })
+
   it('keeps the requested-mode facts line on a success card from a scrolling request', () => {
     updateToast({ status: 'success', card, scrolling: true })
     expect(shadow().querySelector('.check')).not.toBeNull()
