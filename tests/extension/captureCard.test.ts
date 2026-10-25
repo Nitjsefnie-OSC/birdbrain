@@ -151,7 +151,9 @@ describe('post-capture card', () => {
   })
 
   it('keeps the requested-mode facts line on a success card from a scrolling request', () => {
-    updateToast({ status: 'success', card, scrolling: true })
+    // The real outcome carries the stored kind on success too; the
+    // requested-mode line must win over it.
+    updateToast({ status: 'success', card, scrolling: true, storedScreenshot: 'full-page' })
     expect(shadow().querySelector('.check')).not.toBeNull()
     expect(shadow().querySelector('.warn')).toBeNull()
     expect(shadow().querySelector('.facts')!.textContent).toBe(
