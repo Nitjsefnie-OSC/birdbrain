@@ -105,6 +105,46 @@ describe('post-capture card', () => {
     expect(shadow().querySelector('.warning')!.textContent).toBe('Screenshot too large')
   })
 
+  it('marks a degraded fallback with the amber marker and names the stored screenshot', () => {
+    updateToast({
+      status: 'degraded',
+      card,
+      scrolling: true,
+      message: 'Captured (full-page screenshot failed; visible part of the page only)',
+      storedScreenshot: 'viewport'
+    })
+    expect(shadow().querySelector('.check')).toBeNull()
+    expect(shadow().querySelector('.warn')).not.toBeNull()
+    expect(shadow().querySelector('.facts')!.textContent).toBe(
+      'Visible part of the page only · MHTML · sha256 recorded · #42'
+    )
+    expect(shadow().querySelector('.facts')!.getAttribute('title')).toBe(`SHA-256: ${card.hash}`)
+  })
+
+  it('marks a capture stored without its screenshot as degraded, naming no screenshot', () => {
+    updateToast({
+      status: 'degraded',
+      card,
+      scrolling: true,
+      message: 'Captured (screenshot too large)',
+      storedScreenshot: 'none'
+    })
+    expect(shadow().querySelector('.check')).toBeNull()
+    expect(shadow().querySelector('.warn')).not.toBeNull()
+    expect(shadow().querySelector('.facts')!.textContent).toBe(
+      'No screenshot taken · MHTML · sha256 recorded · #42'
+    )
+  })
+
+  it('keeps the requested-mode facts line on a success card from a scrolling request', () => {
+    updateToast({ status: 'success', card, scrolling: true })
+    expect(shadow().querySelector('.check')).not.toBeNull()
+    expect(shadow().querySelector('.warn')).toBeNull()
+    expect(shadow().querySelector('.facts')!.textContent).toBe(
+      'Full page (scrolling) · MHTML · sha256 recorded · #42'
+    )
+  })
+
   it.each(['view', 'recapture'])(
     'dispatches %s and dismisses when acknowledged',
     async (action) => {
