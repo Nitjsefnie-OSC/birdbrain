@@ -1004,11 +1004,15 @@ function quoteNoteTitle(pageTitle: string, url: string): string {
 // 'degraded' toast. The bar has no toast, so the same fact rides its inline
 // result — without it a capture lands short of a frame and reads as an
 // unqualified success. A dropped screenshot wins, as it does on the toast.
+// When the route bound to a capture the case already held, this action
+// acquired nothing and stored no screenshot, so no note rides the result: the
+// fallback the frames took en route describes bytes the route discarded.
 function attachDetail(
   base: string,
-  result: { screenshotStatus: ScreenshotStatus; screenshotWarning?: string },
+  result: { captured: boolean; screenshotStatus: ScreenshotStatus; screenshotWarning?: string },
   fallbackNote?: string
 ): string {
+  if (!result.captured) return base
   if (result.screenshotStatus === 'dropped') {
     return `${base} — ${result.screenshotWarning || 'screenshot too large'}`
   }
