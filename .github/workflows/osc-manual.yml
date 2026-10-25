@@ -31,17 +31,17 @@ jobs:
       - name: Checkout candidate ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: Nitjsefnie-OSC/birdbrain
           ref: ${{ inputs.target_ref }}
           # Full history: preflight resolves its diff-coverage merge base with
           # `git merge-base origin/main HEAD`, which cannot cross a shallow cut.
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Report checked-out SHA
+      - name: Provenance
         shell: bash
         run: |
           set -euo pipefail
+          echo "tested_target_ref=${{ inputs.target_ref }}"
           checked_out_sha="$(git rev-parse HEAD)"
           if [[ ! "$checked_out_sha" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::git rev-parse HEAD did not produce a 40-character commit SHA: $checked_out_sha"
