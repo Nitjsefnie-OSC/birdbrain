@@ -16,8 +16,8 @@ interface ToastOptions {
 const STORED_SCREENSHOT_LABEL: Record<ScreenshotKind, string> = {
   scrolling: 'Scrolling screenshot',
   'full-page': 'Full page screenshot',
-  viewport: 'Visible part of the page only',
-  none: 'No screenshot taken'
+  viewport: 'Visible-area screenshot only',
+  none: 'No screenshot stored'
 }
 
 let removeTimeout: ReturnType<typeof setTimeout> | null = null
@@ -266,9 +266,10 @@ function showCaptureCard(
   title.textContent = card.title
   title.title = card.title
   const facts = shadow.querySelector<HTMLElement>('.facts')!
-  // A degraded outcome names the screenshot actually stored — a fallback
-  // stored less than was asked for, a drop stored none (#1769). Outcomes
-  // without a stored kind keep the requested-mode line.
+  // A degraded outcome names the screenshot actually stored: a fallback
+  // stored less than was asked for, a drop stored none (#1769). Every other
+  // outcome keeps the requested-mode line: a success stored what was asked
+  // for, and with screenshots off no stored kind is sent.
   const stored = outcome.status === 'degraded' ? outcome.storedScreenshot : undefined
   const captureLabel = stored
     ? STORED_SCREENSHOT_LABEL[stored]
