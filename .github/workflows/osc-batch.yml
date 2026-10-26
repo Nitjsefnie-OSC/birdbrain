@@ -34,6 +34,10 @@ permissions:
 concurrency:
   group: osc-batch-${{ github.repository }}-${{ inputs.target_ref }}
   cancel-in-progress: true
+env:
+  APT_OPTS: -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15
+  DROP_AZURE_MIRROR: sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://archive.ubuntu.com/ubuntu|g'
+    /etc/apt/apt-mirrors.txt 2>/dev/null || true
 jobs:
   osc_provenance:
     runs-on: ubuntu-latest
