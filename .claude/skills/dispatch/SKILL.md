@@ -104,9 +104,10 @@ exits immediately unless `CLAUDE_CODE_REMOTE=true`, by design. So:
 - **Run only in a fresh session.** The agent registry loads at session start; a long-lived
   session cannot see agent definitions merged after it started. Never architect this routine as
   a persistent session — each trigger is a new session running one cycle.
-- Sub-work goes to the named agents: `birdbrain-implementer` (writes code, worktree isolation)
-  and `birdbrain-reviewer` (read-only pre-pass). If either agent type fails to resolve, stop
-  and report — do not substitute an inline reimplementation of their contracts.
+- Sub-work goes to the named agents: `birdbrain-implementer` (writes code, worktree isolation),
+  `birdbrain-reviewer` (read-only pre-pass) and `test-reliability-reviewer` (the pre-pass's
+  test pass, section 4). If an agent type fails to resolve, stop and report — do not
+  substitute an inline reimplementation of their contracts.
 - **Relay review feedback by pointer, never by paraphrase.** When handing a PR to the
   implementer, give it the PR number and the instruction to re-enumerate the review surface
   itself, with `--paginate` on each (`gh api --paginate .../pulls/<n>/reviews`,
@@ -799,7 +800,9 @@ list is empty, branch on its `failing` list, which counts only the checks "Sessi
 counts. A check it lists as `ignored` neither holds the poll nor makes CI red; name it in the
 report. `merge-gate` lands there (ADR-0041): its rule reads the verdict this step precedes,
 so it is red on every agent PR until the pre-pass posts `success`, and the script leaves it out
-for that reason. A non-zero exit is not a green: do not run the pre-pass, and report the exit.
+for that reason. So does `probe` (`test-reliability.yml`), which is advisory: the test pass
+below runs the probe itself when that job did not succeed. A non-zero exit is not a green: do
+not run the pre-pass, and report the exit.
 
 - **CI red** → do **not** run the pre-pass. Hand the failure straight to
   `birdbrain-implementer` as a cheap, mechanical fix round: the PR number, the failing job, and
@@ -893,6 +896,29 @@ controls (`git log origin/main..HEAD`) were computed against a different HEAD th
 named. Harmless there because the merge was main-into-branch, but nothing guaranteed that, and
 ADR-0007's hygiene check keys off the *final* pre-pass verdict — which is ambiguous when the
 sha it names is not head.
+
+### The test pass — when the PR's files include a test
+
+The maintainer approved this pass on 2026-10-25. When the PR's files
+(`gh api --paginate repos/thebristolsound/birdbrain/pulls/<n>/files --jq '.[].filename'`)
+include a unit test (`tests/**`, `src/packages/**/tests/**`) or an end-to-end spec (`e2e/**`),
+spawn `test-reliability-reviewer` after `birdbrain-reviewer` returns, in the foreground, under
+the same claim and the same pinned sha. Not alongside it: both run tests in the one checkout,
+and the test pass may edit a source file for a moment to prove a test can fail. A PR that
+touches no test skips the pass. So does a delta pass or a carried-forward verdict, which keep
+the previous round's test findings.
+
+Brief it with the PR number, the pinned sha and the head branch, and tell it to post nothing,
+to read the `Test reliability` check's report from CI when the `probe` job on the pinned sha
+succeeded and to run the probe itself otherwise (pending, failed, cancelled or absent), and to
+leave the tree clean. Then merge the two reports into the one verdict: `request changes` when
+either has a blocking finding, the five top-layer findings chosen from both by severity, and its
+full report after the reviewer's inside the same collapsed block, under a `Test pass` line. Its
+friction notes join the reviewer's.
+
+If it errors, times out or returns no report, post the reviewer's verdict alone, with a
+`Test pass: not run` line inside the collapsed block naming what happened, and name it in the
+section 5 report. A missing test pass does not hold the verdict.
 
 ### Do not re-trigger CodeRabbit with a reply storm
 
