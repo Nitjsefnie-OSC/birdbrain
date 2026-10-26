@@ -560,9 +560,8 @@ export const CURSOR_FREE_TABLES: ReadonlySet<string> = new Set<SyncedTable>(['ta
 
 const CURSOR_BOUND_TABLES = SYNCED_TABLES.filter((table) => !CURSOR_FREE_TABLES.has(table))
 
-// The highest version of `author`'s cursor-bound rows this replica holds in
-// a Case, or 0: the cursor a `rows` request carries. Read from the rows
-// themselves, so a database restore moves it back with them.
+// The highest cursor-bound version held or explicitly refused after verification. Both live
+// in the database, so a restore moves progress back with the rows it describes.
 export function maxAuthorVersionInCase(caseId: string, author: string): number {
   const union = CURSOR_BOUND_TABLES.map(
     (table) =>
@@ -570,9 +569,26 @@ export function maxAuthorVersionInCase(caseId: string, author: string): number {
         WHERE t.author_installation_id = @author AND (${SPECS[table].inCase})`
   ).join(' UNION ALL ')
   const row = getDb()
-    .prepare(`SELECT COALESCE(MAX(v), 0) AS v FROM (${union})`)
+    .prepare(
+      `SELECT COALESCE(MAX(v), 0) AS v FROM (${union}
+         UNION ALL SELECT version AS v FROM working_row_cursors
+          WHERE case_id = @case_id AND author_installation_id = @author)`
+    )
     .get({ case_id: caseId, author }) as { v: number }
   return row.v
+}
+
+// Called only after a verified batch applies, inside that batch's transaction. A refused
+// collision must not make every later session repeat the same bounded set of pages.
+export function recordAuthorRowCursor(caseId: string, author: string, version: number): void {
+  getDb()
+    .prepare(
+      `INSERT INTO working_row_cursors (case_id, author_installation_id, version)
+       VALUES (?, ?, ?)
+       ON CONFLICT (case_id, author_installation_id) DO UPDATE SET version = excluded.version
+        WHERE excluded.version > working_row_cursors.version`
+    )
+    .run(caseId, author, version)
 }
 
 // The most rows of one cursor-bound table a page reads. The query stops at
@@ -615,23 +631,41 @@ export function rowsOfAuthorByTable(
   caseId: string,
   author: string | null,
   sinceVersion: number,
-  limit = ROWS_PAGE_LIMIT
+  limit = ROWS_PAGE_LIMIT,
+  membersHold?: ReadonlySet<string>
 ): Map<SyncedTable, TableOffer> {
   const byTable = new Map<SyncedTable, TableOffer>()
+  const members_hold = membersHold === undefined ? null : JSON.stringify([...membersHold])
+  const reachesMember = (column: string): string =>
+    `(${column} IS NULL OR ${column} IN (SELECT value FROM json_each(@members_hold)))`
   for (const table of SYNCED_TABLES) {
+    const { references } = SPECS[table]
+    const reachable =
+      table === 'note_tags'
+        ? `EXISTS (SELECT 1 FROM notes n WHERE n.id = t.note_id
+                     AND ${reachesMember('n.capture_id')})`
+        : references === null
+          ? '1'
+          : reachesMember(`t.${references.column}`)
+    // Filter before the page limit, including note applications whose parent stays local.
+    const inCase = `(${SPECS[table].inCase})
+                      AND (@members_hold IS NULL OR ${reachable})`
     const select = (predicate: string, tail: string): StoredRow[] =>
       (
         getDb()
           .prepare(
             `SELECT t.* FROM ${table} t
               WHERE ${AUTHOR_MATCH} AND t.row_signature IS NOT NULL
-                AND (${SPECS[table].inCase}) ${predicate}
+                AND ${inCase} ${predicate}
               ORDER BY t.version ${tail}`
           )
-          .all({ case_id: caseId, author, since: sinceVersion, fetch: limit + 1 }) as Record<
-          string,
-          unknown
-        >[]
+          .all({
+            case_id: caseId,
+            author,
+            since: sinceVersion,
+            fetch: limit + 1,
+            members_hold
+          }) as Record<string, unknown>[]
       ).map((r) => toStoredRow(table, r))
     if (CURSOR_FREE_TABLES.has(table)) {
       byTable.set(table, { rows: select('', ''), complete: true })
@@ -646,9 +680,9 @@ export function rowsOfAuthorByTable(
             .prepare(
               `SELECT t.* FROM ${table} t
                 WHERE ${AUTHOR_MATCH} AND t.row_signature IS NOT NULL
-                  AND (${SPECS[table].inCase}) AND t.version = @version`
+                  AND ${inCase} AND t.version = @version`
             )
-            .all({ case_id: caseId, author, version }) as Record<string, unknown>[]
+            .all({ case_id: caseId, author, version, members_hold }) as Record<string, unknown>[]
         ).map((r) => toStoredRow(table, r))
       )
     )
@@ -690,6 +724,19 @@ function conflictTarget(table: SyncedTable): string {
     : `${key.join(', ')}, COALESCE(author_installation_id, '')`
 }
 
+// An id-keyed row cannot take an id already held by another author, including an archive's
+// local copy. An archive header cannot establish authorship, so the held row stays untouched.
+export function rowIdCollision(row: RemoteRow): string | null {
+  const { table, author, fields } = row
+  if (conflictTarget(table) !== 'id') return null
+  const holder = getDb()
+    .prepare(`SELECT author_installation_id FROM ${table} WHERE id = ?`)
+    .get(fields.id) as { author_installation_id: string | null } | undefined
+  return holder && holder.author_installation_id !== author
+    ? `${table} row ${fields.id} of ${author} collides with a row of ${holder.author_installation_id ?? 'this installation'}`
+    : null
+}
+
 // Applies every row a session received, every author's and every page's, in
 // one transaction with foreign keys deferred to its commit (the design's
 // "Working-layer rows" rule, ruling of 2026-10-15): a row may arrive before
@@ -721,14 +768,8 @@ export function applyRows(rows: RemoteRow[]): ApplyOutcome {
         continue
       }
       if (!existing && conflictTarget(table) === 'id') {
-        const holder = getDb()
-          .prepare(`SELECT author_installation_id FROM ${table} WHERE id = ?`)
-          .get(key.id) as { author_installation_id: string | null } | undefined
-        if (holder) {
-          throw new Error(
-            `${table} row ${key.id} of ${author} collides with a row of ${holder.author_installation_id ?? 'this installation'}`
-          )
-        }
+        const collision = rowIdCollision(row)
+        if (collision !== null) throw new Error(collision)
       }
       const reference = referenceOf(table, row.fields)
       if (reference?.state === 'missing') {

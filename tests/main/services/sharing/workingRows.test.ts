@@ -521,6 +521,7 @@ describe('working-layer rows (#1512)', () => {
       refused: []
     })
     expect(getNote('rn')?.title).toBe('v2')
+    expect(maxAuthorVersionInCase(caseId, REMOTE_ID)).toBe(2)
     expect(applyRemoteRows([first, second], roster(), new Set([REMOTE_ID]), caseId)).toEqual({
       applied: 0,
       skipped: 2,
@@ -558,25 +559,31 @@ describe('working-layer rows (#1512)', () => {
     ])
     expect(getNote('rn')?.title).toBe('v2')
     const unasked = applyRemoteRows([first], roster(), new Set(), caseId)
+    expect(maxAuthorVersionInCase(caseId, REMOTE_ID)).toBe(2)
     expect(unasked.refused[0]?.detail).toBe(
       `notes row of ${REMOTE_ID} at version 1: author not requested`
     )
   })
 
-  it('refuses a batch whose reference is not satisfied, and one that collides with a local row', () => {
+  it('refuses a collision individually and a batch whose reference is not satisfied', () => {
     share()
     const mine = createNote({ caseId, title: 'Mine', body: '' })
     const collision = applyRemoteRows(
-      [remoteRow('notes', noteFields(mine.id, 'Taken over'), 1)],
+      [
+        remoteRow('notes', noteFields(mine.id, 'Taken over'), 1),
+        remoteRow('notes', noteFields('unrelated', 'Still arrives'), 2)
+      ],
       roster(),
       new Set([REMOTE_ID]),
       caseId
     )
-    expect(collision.applied).toBe(0)
-    expect(collision.refused[0]?.kind).toBe('peer')
+    expect(collision.applied).toBe(1)
+    expect(collision.refused[0]?.kind).toBe('rejected-entry')
     expect(collision.refused[0]?.detail).toContain('collides with a row of this installation')
     expect(getNote(mine.id)?.title).toBe('Mine')
+    expect(getNote('unrelated')?.title).toBe('Still arrives')
 
+    const cursorBefore = maxAuthorVersionInCase(caseId, REMOTE_ID)
     const dangling = applyRemoteRows(
       [
         remoteRow('notes', noteFields('rn', 'Fine'), 2),
@@ -590,6 +597,7 @@ describe('working-layer rows (#1512)', () => {
     expect(dangling.refused[0]?.kind).toBe('peer')
     expect(dangling.refused[0]?.detail).toContain('FOREIGN KEY')
     expect(getNote('rn')).toBeUndefined()
+    expect(maxAuthorVersionInCase(caseId, REMOTE_ID)).toBe(cursorBefore)
 
     // A reference satisfied within the batch lands whatever the order.
     const ordered = applyRemoteRows(
@@ -608,6 +616,48 @@ describe('working-layer rows (#1512)', () => {
     )
     expect(ordered).toEqual({ applied: 3, skipped: 0, refused: [] })
     expect(getTagsForNote('rn').map((t) => t.name)).toEqual(['remote'])
+  })
+
+  it('refuses applications of a colliding tag without relabelling held notes or Captures', () => {
+    share()
+    const captureId = capture()
+    const tag = createTag({ name: 'Held meaning' })
+    const mine = createNote({ caseId, title: 'Held note' })
+    const outcome = applyRemoteRows(
+      [
+        remoteRow('note_tags', { note_id: 'linked', tag_id: tag.id }, 6),
+        remoteRow('notes', noteFields(mine.id, 'Different author'), 1),
+        remoteRow(
+          'tags',
+          {
+            id: tag.id,
+            name: 'Remote meaning',
+            color: null,
+            created_at: '2026-10-01T00:00:00.000Z'
+          },
+          2
+        ),
+        remoteRow('notes', noteFields('linked', 'New note'), 3),
+        remoteRow('exhibit_tags', { exhibit_id: captureId, tag_id: tag.id }, 4),
+        remoteRow('note_tags', { note_id: mine.id, tag_id: tag.id }, 5),
+        remoteRow('notes', noteFields('unrelated', 'Still arrives'), 7)
+      ],
+      roster(),
+      new Set([REMOTE_ID]),
+      caseId
+    )
+    expect(outcome.applied).toBe(2)
+    expect(outcome.refused).toHaveLength(5)
+    expect(outcome.refused.every(({ kind }) => kind === 'rejected-entry')).toBe(true)
+    expect(outcome.refused.find(({ detail }) => detail.startsWith('tags row'))?.detail).toContain(
+      'collides with a row of this installation'
+    )
+    expect(getTag(tag.id)?.name).toBe('Held meaning')
+    expect(getNote(mine.id)?.title).toBe('Held note')
+    expect(getNote('unrelated')?.title).toBe('Still arrives')
+    expect(getTagsForCapture(captureId)).toEqual([])
+    expect(getTagsForNote(mine.id)).toEqual([])
+    expect(getTagsForNote('linked')).toEqual([])
   })
 
   // Scheduled review finding 2: a received row was never checked against
@@ -670,6 +720,45 @@ describe('working-layer rows (#1512)', () => {
       caseId
     )
     expect(fine).toEqual({ applied: 3, skipped: 0, refused: [] })
+  })
+
+  it('advances only verified Case-bound foreign-note refusals and rolls back failed batches', () => {
+    share()
+    const elsewhere = createCase({ name: 'Imported copy' }).id
+    const held = createNote({ caseId: elsewhere, title: 'Held elsewhere' })
+    const tag = createTag({ name: 'Held tag' })
+    const fields = { note_id: held.id, tag_id: tag.id }
+    const wrongCase = remoteRow('note_tags', fields, 10, null, elsewhere)
+    const invalid = { ...remoteRow('note_tags', fields, 11), signature: 'bm90' }
+    const refused = applyRemoteRows([wrongCase, invalid], roster(), new Set([REMOTE_ID]), caseId)
+    expect(refused.applied).toBe(0)
+    expect(refused.refused).toHaveLength(2)
+    expect(maxAuthorVersionInCase(caseId, REMOTE_ID)).toBe(0)
+
+    const bound = applyRemoteRows(
+      [remoteRow('note_tags', fields, 12)],
+      roster(),
+      new Set([REMOTE_ID]),
+      caseId
+    )
+    expect(bound.applied).toBe(0)
+    expect(bound.refused[0]?.detail).toContain(`references a row of Case ${elsewhere}`)
+    expect(maxAuthorVersionInCase(caseId, REMOTE_ID)).toBe(12)
+    const failed = applyRemoteRows(
+      [
+        remoteRow('notes', noteFields('pending', 'Rolls back'), 13),
+        remoteRow('note_tags', { note_id: 'pending', tag_id: 'missing' }, 14),
+        remoteRow('note_tags', fields, 15)
+      ],
+      roster(),
+      new Set([REMOTE_ID]),
+      caseId
+    )
+    expect(failed.refused.some(({ kind }) => kind === 'peer')).toBe(true)
+    expect(getNote('pending')).toBeUndefined()
+    expect(maxAuthorVersionInCase(caseId, REMOTE_ID)).toBe(12)
+    expect(getNote(held.id)?.title).toBe('Held elsewhere')
+    expect(getTagsForNote(held.id)).toEqual([])
   })
 
   // Fourth pre-pass, finding 2: a received note was checked on its own
@@ -1029,6 +1118,51 @@ describe('working-layer rows (#1512)', () => {
       caseId
     )
     expect(maxAuthorVersionInCase(caseId, REMOTE_ID)).toBe(6)
+  })
+
+  it('filters unreachable references before page bounds and keeps whole eligible groups', () => {
+    share()
+    const caps = [1, 2, 3].map((n) => capture(`https://example.com/${n}`))
+    const result = applyRemoteRows(
+      [
+        remoteRow(
+          'tags',
+          { id: 'rt', name: 'remote', color: null, created_at: '2026-10-01T00:00:00.000Z' },
+          1
+        ),
+        remoteRow('notes', noteFields('hidden1', 'local', { capture_id: caps[0] }), 1),
+        remoteRow('notes', noteFields('hidden2', 'local', { capture_id: caps[0] }), 2),
+        remoteRow('notes', noteFields('loose', 'loose'), 3),
+        remoteRow('notes', noteFields('shared', 'shared', { capture_id: caps[1] }), 4),
+        remoteRow('note_tags', { note_id: 'hidden1', tag_id: 'rt' }, 5),
+        ...caps.map((cap) => remoteRow('exhibit_tags', { exhibit_id: cap, tag_id: 'rt' }, 6))
+      ],
+      roster(),
+      new Set([REMOTE_ID]),
+      caseId
+    )
+    expect(result.refused).toEqual([])
+    const membersHold = new Set(caps.slice(1))
+    const first = rowsOfAuthorByTable(caseId, REMOTE_ID, 0, 1, membersHold)
+    expect(first.get('notes')).toMatchObject({
+      rows: [{ fields: { id: 'loose' } }],
+      complete: false
+    })
+    expect(first.get('note_tags')).toEqual({ rows: [], complete: true })
+    expect(first.get('exhibit_tags')?.rows.map(({ fields }) => fields.exhibit_id)).toEqual(
+      caps.slice(1)
+    )
+    expect(first.get('exhibit_tags')?.complete).toBe(false)
+    expect(first.get('tags')?.rows).toHaveLength(1)
+    const next = rowsOfAuthorByTable(caseId, REMOTE_ID, 3, 1, membersHold)
+    expect(next.get('notes')).toMatchObject({
+      rows: [{ fields: { id: 'shared' } }],
+      complete: true
+    })
+    expect(rowsOfAuthorByTable(caseId, REMOTE_ID, 0, 1, new Set()).get('notes')).toMatchObject({
+      rows: [{ fields: { id: 'loose' } }],
+      complete: true
+    })
   })
 
   // Rows on a deleted Capture (#1877): another member's stay as signed, under
